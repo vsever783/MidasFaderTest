@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <application
+        android:allowBackup="true"
+        android:label="Midas Fader Control"
+        android:theme="@style/Theme.AppCompat.DayNight">
+
+        <!-- Основной экран инженера - как было. Своя taskAffinity, чтобы
+             Android вёл его отдельной задачей от мониторного экрана -
+             иначе при двух значках из одного пакета система разворачивает
+             уже открытую задачу вместо нужного экрана. -->
+        <activity
+            android:name=".MainActivity"
+            android:label="Midas Fader Control"
+            android:taskAffinity="com.example.midasfadercontrol.engineer"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Отдельный значок на телефоне для музыканта - тот же APK,
+             свой вход через ConnectionActivity, своя taskAffinity -->
+        <activity
+            android:name=".ConnectionActivity"
+            android:label="Midas Monitor"
+            android:taskAffinity="com.example.midasfadercontrol.monitor"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".MonitorActivity"
+            android:taskAffinity="com.example.midasfadercontrol.monitor"
+            android:exported="false" />
+
+    </application>
+</manifest>

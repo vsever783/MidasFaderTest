@@ -1,0 +1,387 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#000000">
+
+    <!-- Верхняя панель: назад + имя канала -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#1c1c1e"
+        android:padding="12dp">
+
+        <Button
+            android:id="@+id/btnDetailBack"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="← Назад"
+            android:textColor="#ffffff"
+            android:backgroundTint="#3a3a3c" />
+
+        <TextView
+            android:id="@+id/textDetailChannelName"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="16dp"
+            android:text="CH 1"
+            android:textColor="#ffffff"
+            android:textStyle="bold"
+            android:textSize="20sp" />
+    </LinearLayout>
+
+    <!--
+        Ряд "блоков обработки" - COMP и SENDS, задел под EQ и т.д. в будущем:
+        просто добавляем сюда ещё такие же кнопки-вкладки, когда появится,
+        что в них показывать.
+    -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#1c1c1e"
+        android:padding="8dp">
+
+        <Button
+            android:id="@+id/btnTabInput"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="INPUT"
+            android:textColor="#000000"
+            android:textStyle="bold"
+            android:backgroundTint="#ff9f0a"
+            android:layout_marginEnd="8dp" />
+
+        <Button
+            android:id="@+id/btnTabComp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="COMP"
+            android:textColor="#ffffff"
+            android:textStyle="bold"
+            android:backgroundTint="#3a3a3c"
+            android:layout_marginEnd="8dp" />
+
+        <Button
+            android:id="@+id/btnTabSends"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SENDS"
+            android:textColor="#ffffff"
+            android:textStyle="bold"
+            android:backgroundTint="#3a3a3c"
+            android:layout_marginEnd="8dp" />
+
+        <Button
+            android:id="@+id/btnTabEq"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="EQ"
+            android:textColor="#ffffff"
+            android:textStyle="bold"
+            android:backgroundTint="#3a3a3c" />
+    </LinearLayout>
+
+    <!-- Основная область: контент слева, mute/solo/фейдер/метр справа -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
+
+        <!-- Содержимое текущего блока (сейчас всегда COMP) -->
+        <ScrollView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1">
+
+          <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!--
+                Вход канала - гейн (уже подключено), позже сюда же добавятся
+                48V, переворот фазы и отдельная ручка gain trim.
+            -->
+            <LinearLayout
+                android:id="@+id/inputBlockContent"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:gravity="center_horizontal"
+                android:padding="20dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="GAIN"
+                    android:textColor="#ff9f0a"
+                    android:textStyle="bold"
+                    android:textSize="14sp"
+                    android:layout_marginBottom="12dp" />
+
+                <com.example.midasfader.RotaryKnobView
+                    android:id="@+id/knobDetailGain"
+                    android:layout_width="120dp"
+                    android:layout_height="120dp" />
+
+                <TextView
+                    android:id="@+id/textDetailGainValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0,00"
+                    android:textColor="#8e8e93"
+                    android:textSize="14sp"
+                    android:layout_marginTop="12dp" />
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/compBlockContent"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp"
+                android:visibility="gone">
+
+                <!-- Включение/выключение компрессора - перенесено сюда из
+                     основного экрана, чтобы быть рядом с остальными
+                     настройками. -->
+                <Button
+                    android:id="@+id/btnDetailCompIn"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="COMP ВЫКЛ"
+                    android:textStyle="bold"
+                    android:textColor="#ffffff"
+                    android:layout_marginBottom="20dp" />
+
+                <!-- RATIO -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="RATIO"
+                    android:textColor="#ff9f0a"
+                    android:textStyle="bold"
+                    android:textSize="12sp" />
+                <SeekBar
+                    android:id="@+id/seekCompRatio"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="1000"
+                    android:progress="0" />
+                <TextView
+                    android:id="@+id/textCompRatioValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0,00"
+                    android:textColor="#aaaaaa"
+                    android:textSize="12sp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- ATTACK -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ATTACK"
+                    android:textColor="#ff9f0a"
+                    android:textStyle="bold"
+                    android:textSize="12sp" />
+                <SeekBar
+                    android:id="@+id/seekCompAttack"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="1000"
+                    android:progress="0" />
+                <TextView
+                    android:id="@+id/textCompAttackValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0,00"
+                    android:textColor="#aaaaaa"
+                    android:textSize="12sp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- RELEASE -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="RELEASE"
+                    android:textColor="#ff9f0a"
+                    android:textStyle="bold"
+                    android:textSize="12sp" />
+                <SeekBar
+                    android:id="@+id/seekCompRelease"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="1000"
+                    android:progress="0" />
+                <TextView
+                    android:id="@+id/textCompReleaseValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0,00"
+                    android:textColor="#aaaaaa"
+                    android:textSize="12sp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- THRESHOLD -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="THRESHOLD"
+                    android:textColor="#ff9f0a"
+                    android:textStyle="bold"
+                    android:textSize="12sp" />
+                <SeekBar
+                    android:id="@+id/seekCompThreshold"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="1000"
+                    android:progress="0" />
+                <TextView
+                    android:id="@+id/textCompThresholdValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0,00"
+                    android:textColor="#aaaaaa"
+                    android:textSize="12sp"
+                    android:layout_marginBottom="16dp" />
+
+                <!-- MAKEUP GAIN -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="MAKEUP GAIN"
+                    android:textColor="#ff9f0a"
+                    android:textStyle="bold"
+                    android:textSize="12sp" />
+                <SeekBar
+                    android:id="@+id/seekCompMakeup"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="1000"
+                    android:progress="0" />
+                <TextView
+                    android:id="@+id/textCompMakeupValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0,00"
+                    android:textColor="#aaaaaa"
+                    android:textSize="12sp" />
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/sendsBlockContent"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp"
+                android:visibility="gone" />
+            <!-- Заполняется программно (16 aux-посылов) в openChannelDetail() -->
+
+            <LinearLayout
+                android:id="@+id/eqBlockContent"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp"
+                android:visibility="gone" />
+            <!-- Заполняется программно (4 полосы EQ) в openChannelDetail() -->
+
+          </LinearLayout>
+        </ScrollView>
+
+        <!--
+            Постоянная боковая панель - видна независимо от того, какой блок
+            открыт (COMP/EQ/Sends в будущем). Как в Mixing Station: уровень
+            всегда под контролем, даже когда крутишь эффекты.
+        -->
+        <LinearLayout
+            android:layout_width="110dp"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:background="#151517"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp">
+
+            <ToggleButton
+                android:id="@+id/detailSolo"
+                android:layout_width="match_parent"
+                android:layout_height="36dp"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="8dp"
+                android:textOn="SOLO"
+                android:textOff="SOLO"
+                android:textSize="11sp"
+                android:textColor="#ffffff" />
+
+            <Button
+                android:id="@+id/detailMute"
+                android:layout_width="match_parent"
+                android:layout_height="36dp"
+                android:layout_marginStart="8dp"
+                android:layout_marginEnd="8dp"
+                android:layout_marginTop="8dp"
+                android:text="MUTE"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textColor="#ffffff" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:layout_marginTop="12dp"
+                android:orientation="horizontal"
+                android:gravity="center_horizontal">
+
+                <FrameLayout
+                    android:layout_width="8dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginEnd="4dp">
+                    <View
+                        android:id="@+id/detailMeterBar"
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_gravity="bottom"
+                        android:background="#34c759" />
+                </FrameLayout>
+
+                <FrameLayout
+                    android:id="@+id/detailFaderContainer"
+                    android:layout_width="32dp"
+                    android:layout_height="match_parent">
+
+                    <SeekBar
+                        android:id="@+id/detailFader"
+                        android:layout_width="220dp"
+                        android:layout_height="32dp"
+                        android:layout_gravity="center"
+                        android:max="1000"
+                        android:progress="0"
+                        android:progressTint="#ff9f0a"
+                        android:thumbTint="#ffffff"
+                        android:rotation="270" />
+                </FrameLayout>
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/textDetailLevelValue"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0,00"
+                android:textColor="#ff9f0a"
+                android:textStyle="bold"
+                android:textSize="12sp"
+                android:layout_marginTop="8dp" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

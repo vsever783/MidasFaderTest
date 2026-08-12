@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Планшеты (экран с наименьшей стороной от 600dp) — крупнее и просторнее -->
+    <dimen name="channel_strip_width">130dp</dimen>
+    <dimen name="channel_number_text_size">20sp</dimen>
+    <dimen name="channel_label_text_size">14sp</dimen>
+    <dimen name="channel_knob_size">56dp</dimen>
+    <dimen name="channel_fader_thickness">44dp</dimen>
+</resources>

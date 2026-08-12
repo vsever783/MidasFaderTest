@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="84dp"
+    android:layout_height="match_parent"
+    android:layout_marginEnd="6dp"
+    android:orientation="vertical"
+    android:gravity="center_horizontal"
+    android:background="#1c1c1e"
+    android:paddingTop="10dp"
+    android:paddingBottom="12dp">
+
+    <TextView
+        android:id="@+id/textChannelNumber"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="1"
+        android:textColor="#ff9f0a"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/textChannelName"
+        android:layout_width="72dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="1dp"
+        android:layout_marginBottom="6dp"
+        android:text="CH 1"
+        android:textColor="#ffffff"
+        android:textSize="11sp"
+        android:gravity="center"
+        android:maxLines="1"
+        android:ellipsize="end" />
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <SeekBar
+            android:id="@+id/seekSend"
+            android:layout_width="220dp"
+            android:layout_height="36dp"
+            android:layout_gravity="center"
+            android:max="1000"
+            android:progress="0"
+            android:progressTint="#ff9f0a"
+            android:thumbTint="#ffffff"
+            android:rotation="270" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/textSendValue"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="0.00"
+        android:textColor="#8e8e93"
+        android:textSize="11sp" />
+</LinearLayout>

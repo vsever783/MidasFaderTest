@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:fitsSystemWindows="true"
+    android:background="#000000">
+
+    <!-- Верхняя панель: статус, IP, название шины -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#151517"
+        android:padding="12dp">
+
+        <Button
+            android:id="@+id/btnChangeBus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="⟵ Шина" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="12dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/textConnectionStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="● Подключено"
+                android:textColor="#34c759"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/textBusTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="AUX 1"
+                android:textColor="#ffffff"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Переключатель страниц по 8 каналов -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#0c0c0d"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/containerPages"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:padding="8dp" />
+    </HorizontalScrollView>
+
+    <!-- Каналы (постранично, 8 штук) + мастер-панель выбранной шины -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal"
+        android:padding="6dp">
+
+        <HorizontalScrollView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/containerChannels"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
+        <!-- Правая панель - собственная громкость мониторной шины -->
+        <LinearLayout
+            android:layout_width="130dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="6dp"
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:background="#1c1c1e"
+            android:paddingTop="14dp"
+            android:paddingBottom="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="MASTER"
+                android:textColor="#8e8e93"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/textBusFaderValue"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="0.00"
+                android:textColor="#ff9f0a"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:layout_marginTop="10dp">
+
+                <SeekBar
+                    android:id="@+id/seekBusFader"
+                    android:layout_width="280dp"
+                    android:layout_height="52dp"
+                    android:layout_gravity="center"
+                    android:max="1000"
+                    android:progress="0"
+                    android:progressTint="#ff9f0a"
+                    android:thumbTint="#ffffff"
+                    android:rotation="270" />
+            </FrameLayout>
+
+            <Button
+                android:id="@+id/btnBusMute"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="MUTE"
+                android:textSize="12sp"
+                android:backgroundTint="#3a3a3c"
+                android:textColor="#ffffff" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
