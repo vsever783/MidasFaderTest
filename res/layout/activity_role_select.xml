@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="#000000"
+    android:padding="32dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="MIDAS"
+        android:textColor="#ff9f0a"
+        android:textStyle="bold"
+        android:textSize="36sp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Выберите режим"
+        android:textColor="#8e8e93"
+        android:textSize="14sp"
+        android:layout_marginBottom="48dp" />
+
+    <Button
+        android:id="@+id/btnRoleEngineer"
+        android:layout_width="match_parent"
+        android:layout_height="72dp"
+        android:text="ЗВУКОРЕЖИССЁР"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:textColor="#ffffff"
+        android:backgroundTint="#ff9f0a"
+        android:layout_marginBottom="16dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Полное управление пультом: все каналы, мастер, aux, VCA"
+        android:textColor="#8e8e93"
+        android:textSize="12sp"
+        android:gravity="center"
+        android:layout_marginBottom="32dp" />
+
+    <Button
+        android:id="@+id/btnRoleMonitor"
+        android:layout_width="match_parent"
+        android:layout_height="72dp"
+        android:text="МУЗЫКАНТ (МОНИТОР)"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:textColor="#ffffff"
+        android:backgroundTint="#3a3a3c" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Своя мониторная шина: посылы каналов и громкость шины"
+        android:textColor="#8e8e93"
+        android:textSize="12sp"
+        android:gravity="center" />
+
+</LinearLayout>

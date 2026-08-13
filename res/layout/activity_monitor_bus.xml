@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical"
+    android:background="#000000">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#1c1c1e"
+        android:padding="@dimen/monitor_top_bar_padding"
+        android:gravity="center_vertical">
+
+        <Button
+            android:id="@+id/btnMonitorBack"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="0dp"
+            android:text="← Назад"
+            android:textColor="#ffffff"
+            android:backgroundTint="#3a3a3c" />
+
+        <TextView
+            android:id="@+id/textMonitorBusName"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="16dp"
+            android:text="BUS 1"
+            android:textColor="#ff9f0a"
+            android:textStyle="bold"
+            android:textSize="18sp" />
+    </LinearLayout>
+
+    <!--
+        Своя громкость и mute выбранной шины - всегда видны, независимо от
+        того, сколько каналов пролистано ниже (как постоянная панель
+        мастера/детального экрана в инженерском режиме).
+    -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#151517"
+        android:padding="@dimen/monitor_buslevel_padding"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Громкость моей шины"
+            android:textColor="#8e8e93"
+            android:textSize="12sp" />
+
+        <SeekBar
+            android:id="@+id/seekMonitorBusLevel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="12dp"
+            android:layout_marginEnd="12dp"
+            android:max="1000"
+            android:progress="0" />
+
+        <Button
+            android:id="@+id/btnMonitorBusMute"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="0dp"
+            android:text="MUTE"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:textColor="#ffffff"
+            android:backgroundTint="#3a3a3c" />
+    </LinearLayout>
+
+    <!-- Банки каналов по 8, как в инженерском режиме - листаем страницами. -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none"
+        android:background="#151517">
+
+        <LinearLayout
+            android:id="@+id/monitorBankButtonsRow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:padding="@dimen/monitor_bank_row_padding" />
+    </HorizontalScrollView>
+
+    <!--
+        Каждый канал занимает всю выделенную область по высоте (просили) -
+        полосы строятся программно, вертикальный SeekBar-посыл растягивается
+        под фактическую высоту экрана, как и обычный фейдер в инженерском
+        режиме. Работает и в портретной, и в альбомной ориентации (та же
+        адаптивная логика подгонки ширины повёрнутого SeekBar).
+    -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#000000">
+
+        <LinearLayout
+            android:id="@+id/containerMonitorChannels"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:orientation="horizontal"
+            android:paddingStart="4dp"
+            android:paddingEnd="4dp" />
+    </HorizontalScrollView>
+
+</LinearLayout>
