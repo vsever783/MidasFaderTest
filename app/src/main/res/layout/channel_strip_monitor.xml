@@ -1,45 +1,60 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="84dp"
+    android:layout_width="82dp"
     android:layout_height="match_parent"
-    android:layout_marginEnd="6dp"
     android:orientation="vertical"
     android:gravity="center_horizontal"
-    android:background="#1c1c1e"
-    android:paddingTop="10dp"
-    android:paddingBottom="12dp">
+    android:background="#111113"
+    android:paddingBottom="@dimen/monitor_channel_strip_bottom_padding">
+
+    <LinearLayout
+        android:id="@+id/monitorChannelHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:background="#2c2c2e"
+        android:paddingTop="@dimen/monitor_channel_header_padding"
+        android:paddingBottom="@dimen/monitor_channel_header_padding">
+
+        <TextView
+            android:id="@+id/textMonitorChannelLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="CH 1"
+            android:textColor="#ffffff"
+            android:textStyle="bold"
+            android:textSize="13sp"
+            android:maxLines="1" />
+    </LinearLayout>
 
     <TextView
-        android:id="@+id/textChannelNumber"
+        android:id="@+id/textMonitorSendValue"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="1"
+        android:text="0,00"
         android:textColor="#ff9f0a"
-        android:textSize="13sp"
-        android:textStyle="bold" />
+        android:textStyle="bold"
+        android:textSize="12sp"
+        android:layout_marginTop="@dimen/monitor_channel_value_margin" />
 
-    <TextView
-        android:id="@+id/textChannelName"
-        android:layout_width="72dp"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="1dp"
-        android:layout_marginBottom="6dp"
-        android:text="CH 1"
-        android:textColor="#ffffff"
-        android:textSize="11sp"
-        android:gravity="center"
-        android:maxLines="1"
-        android:ellipsize="end" />
-
+    <!--
+        Посыл канала в шину занимает ВСЮ оставшуюся высоту (запрошено) -
+        ширина повёрнутого SeekBar подгоняется под реальную высоту
+        программно, той же логикой, что и у обычного фейдера в инженерском
+        режиме - работает и в портретной, и в альбомной ориентации одинаково.
+    -->
     <FrameLayout
+        android:id="@+id/monitorSendContainer"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1">
+        android:layout_weight="1"
+        android:layout_marginTop="@dimen/monitor_channel_fader_top_margin">
 
         <SeekBar
-            android:id="@+id/seekSend"
+            android:id="@+id/seekMonitorSend"
             android:layout_width="220dp"
-            android:layout_height="36dp"
+            android:layout_height="32dp"
             android:layout_gravity="center"
             android:max="1000"
             android:progress="0"
@@ -48,12 +63,4 @@
             android:rotation="270" />
     </FrameLayout>
 
-    <TextView
-        android:id="@+id/textSendValue"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:text="0.00"
-        android:textColor="#8e8e93"
-        android:textSize="11sp" />
 </LinearLayout>

@@ -73,6 +73,27 @@ object Pro2Commands {
     // push-значение приходит как 1 байт (0..~127-130 в наблюдаемых данных).
     fun meterAddress() = "/enPPCMeterMessage/$GROUP/enMeter"
 
+    // === Вход (INPUT) - панорама и фантомное питание ПОДТВЕРЖДЕНЫ реальным
+    // трафиком iPad. Переворот фазы (enInputPhaseIn) НЕ встретился в захвате
+    // (видимо, iPad его в той сессии не трогал), но есть в списке команд с
+    // понятным описанием "Toggle channel input phase" - высокая уверенность
+    // по аналогии с остальными enPPCSwitchMessage-переключателями. ===
+    fun panAddress() = "/enPPCRotaryMessage/$GROUP/enFaderPan"
+    fun phantomPowerAddress() = "/enPPCSwitchMessage/$GROUP/enMicSplitPhantomPowerIn"
+    fun phaseAddress() = "/enPPCSwitchMessage/$GROUP/enInputPhaseIn"
+
+    // === Gate/Expander - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным трафиком iPad
+    // (большой захват "all config"). ===
+    fun gateInAddress() = "/enPPCSwitchMessage/$GROUP/enExpGateIn"
+    fun gateThresholdAddress() = "/enPPCRotaryMessage/$GROUP/enExpanderGateThreshold"
+    fun gateRangeAddress() = "/enPPCRotaryMessage/$GROUP/enExpanderGateRange"
+    fun gateAttackAddress() = "/enPPCRotaryMessage/$GROUP/enExpanderGateAttackTime"
+    fun gateHoldAddress() = "/enPPCRotaryMessage/$GROUP/enExpanderGateHoldTime"
+    fun gateReleaseAddress() = "/enPPCRotaryMessage/$GROUP/enExpanderGateReleaseTime"
+    fun gateTransientAddress() = "/enPPCRotaryMessage/$GROUP/enExpanderGateTransient"
+    fun gateFilterFreqAddress() = "/enPPCRotaryMessage/$GROUP/enExpanderGateFilterFrequency"
+    fun gateFiltersInAddress() = "/enPPCSwitchMessage/$GROUP/enExpGateFiltersIn"
+
     // === Компрессор/лимитер - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным трафиком
     // (запись "33 fader compressor") ===
     fun compRatioAddress() = "/enPPCRotaryMessage/$GROUP/enComLimRatio"
@@ -83,6 +104,9 @@ object Pro2Commands {
     // enPPCSwitchMessage, как и mute - поэтому обращаемся с ним так же (одна
     // отправка на нажатие, без повторов, состояние - из push, а не локально).
     fun compInAddress() = "/enPPCSwitchMessage/$GROUP/enCompLimIn"
+    // Фильтр компрессора - ПОДТВЕРЖДЕНО тем же захватом.
+    fun compFiltersInAddress() = "/enPPCSwitchMessage/$GROUP/enCompLimFiltersIn"
+    fun compFilterFreqAddress() = "/enPPCRotaryMessage/$GROUP/enCompLimFilterFrequency"
 
     fun setFader(channelIndex: Int, level: Float): ByteArray =
         OscUtil.encode(faderAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
@@ -99,6 +123,45 @@ object Pro2Commands {
     /** argbColor - standard Android ARGB packed int, e.g. from Color.argb(255, r, g, b). */
     fun setColour(channelIndex: Int, argbColor: Int): ByteArray =
         OscUtil.encode(colourAddress(), listOf(channelIndex, argbColor))
+
+    fun setName(channelIndex: Int, name: String): ByteArray =
+        OscUtil.encode(nameAddress(), listOf(channelIndex, name))
+
+    fun setPan(channelIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(panAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
+
+    fun setPhantomPower(channelIndex: Int, on: Boolean): ByteArray =
+        OscUtil.encode(phantomPowerAddress(), listOf(channelIndex, if (on) 1 else 0))
+
+    fun setPhase(channelIndex: Int, inverted: Boolean): ByteArray =
+        OscUtil.encode(phaseAddress(), listOf(channelIndex, if (inverted) 1 else 0))
+
+    fun setGateIn(channelIndex: Int, on: Boolean): ByteArray =
+        OscUtil.encode(gateInAddress(), listOf(channelIndex, if (on) 1 else 0))
+
+    fun setGateThreshold(channelIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(gateThresholdAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
+
+    fun setGateRange(channelIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(gateRangeAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
+
+    fun setGateAttack(channelIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(gateAttackAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
+
+    fun setGateHold(channelIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(gateHoldAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
+
+    fun setGateRelease(channelIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(gateReleaseAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
+
+    fun setGateTransient(channelIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(gateTransientAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
+
+    fun setGateFilterFreq(channelIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(gateFilterFreqAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
+
+    fun setGateFiltersIn(channelIndex: Int, on: Boolean): ByteArray =
+        OscUtil.encode(gateFiltersInAddress(), listOf(channelIndex, if (on) 1 else 0))
 
     fun setCompRatio(channelIndex: Int, level: Float): ByteArray =
         OscUtil.encode(compRatioAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
@@ -118,6 +181,12 @@ object Pro2Commands {
     /** compIn - как и mute, это TOGGLE: значение в аргументе не важно, важен сам факт пакета. */
     fun setCompIn(channelIndex: Int): ByteArray =
         OscUtil.encode(compInAddress(), listOf(channelIndex, 1))
+
+    fun setCompFiltersIn(channelIndex: Int, on: Boolean): ByteArray =
+        OscUtil.encode(compFiltersInAddress(), listOf(channelIndex, if (on) 1 else 0))
+
+    fun setCompFilterFreq(channelIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(compFilterFreqAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
 
     /** GET request: same address, only the channel index as argument, no value. */
     fun getFader(channelIndex: Int): ByteArray =
@@ -214,9 +283,14 @@ object Pro2Commands {
     // === Мастер (НЕ подтверждено реальным захватом - см. заметку выше) ===
     private const val MASTER_GROUP = "enVirtualMasters"
     fun masterFaderAddress() = "/enPPCFaderMessage/$MASTER_GROUP/enFaderLevel"
-    fun masterMuteAddress() = "/enPPCSwitchMessage/$MASTER_GROUP/enMuteStatus"
+    // ИСПРАВЛЕНО: подтверждено реальным трафиком iPad (Mixtender) - у мастера
+    // используется enFaderMute, а НЕ enMuteStatus (это была ошибка по
+    // аналогии с каналами - на самом деле мастер здесь ближе к aux
+    // returns/aux-шинам, у которых тоже enFaderMute).
+    fun masterMuteAddress() = "/enPPCSwitchMessage/$MASTER_GROUP/enFaderMute"
     fun masterSoloAddress() = "/enPPCSwitchMessage/$MASTER_GROUP/enFaderSolo"
     fun masterMeterAddress() = "/enPPCMeterMessage/$MASTER_GROUP/enMeter"
+    fun masterNameAddress() = "/enPPCStringMessage/$MASTER_GROUP/enPathname"
 
     fun setMasterFader(masterIndex: Int, level: Float): ByteArray =
         OscUtil.encode(masterFaderAddress(), listOf(masterIndex, level.coerceIn(0f, 1f)))
@@ -273,6 +347,8 @@ object Pro2Commands {
     fun auxBusMuteAddress() = "/enPPCSwitchMessage/$AUX_BUS_GROUP/enFaderMute"
     fun auxBusSoloAddress() = "/enPPCSwitchMessage/$AUX_BUS_GROUP/enFaderSolo"
     fun auxBusNameAddress() = "/enPPCStringMessage/$AUX_BUS_GROUP/enPathname"
+    // Подтверждено реальным трафиком iPad.
+    fun auxBusColourAddress() = "/enPPCIntegerMessage/$AUX_BUS_GROUP/enChannelColour"
     fun auxBusMeterAddress() = "/enPPCMeterMessage/$AUX_BUS_GROUP/enMeter"
 
     fun setAuxBusFader(busIndex: Int, level: Float): ByteArray =
@@ -292,6 +368,36 @@ object Pro2Commands {
 
     fun getAuxBusName(busIndex: Int): ByteArray =
         OscUtil.encode(auxBusNameAddress(), listOf(busIndex))
+
+    // === VCA-группы (8 шт.) - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным трафиком iPad
+    // (Mixtender). ВАЖНО: старый список команд (muffeeee JSON) указывал
+    // неверную адресацию enMCAFaderLevel1..8 (номер группы в имени
+    // параметра) - на самом деле всё как у остальных групп: multiPath,
+    // индекс передаётся аргументом, имя параметра одно на все группы. ===
+    private const val VCA_GROUP = "enVirtualVCAGroups"
+    fun vcaFaderAddress() = "/enPPCFaderMessage/$VCA_GROUP/enVCAFaderLevel"
+    fun vcaMuteAddress() = "/enPPCSwitchMessage/$VCA_GROUP/enVCAMute"
+    fun vcaSoloAddress() = "/enPPCSwitchMessage/$VCA_GROUP/enVCASolo"
+    fun vcaNameAddress() = "/enPPCStringMessage/$VCA_GROUP/enPathname"
+    fun vcaColourAddress() = "/enPPCIntegerMessage/$VCA_GROUP/enChannelColour"
+
+    fun setVcaFader(vcaIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(vcaFaderAddress(), listOf(vcaIndex, level.coerceIn(0f, 1f)))
+
+    fun setVcaMute(vcaIndex: Int, muted: Boolean): ByteArray =
+        OscUtil.encode(vcaMuteAddress(), listOf(vcaIndex, if (muted) 1 else 0))
+
+    fun setVcaSolo(vcaIndex: Int, soloed: Boolean): ByteArray =
+        OscUtil.encode(vcaSoloAddress(), listOf(vcaIndex, if (soloed) 1 else 0))
+
+    fun getVcaFader(vcaIndex: Int): ByteArray =
+        OscUtil.encode(vcaFaderAddress(), listOf(vcaIndex))
+
+    fun getVcaMute(vcaIndex: Int): ByteArray =
+        OscUtil.encode(vcaMuteAddress(), listOf(vcaIndex))
+
+    fun getVcaName(vcaIndex: Int): ByteArray =
+        OscUtil.encode(vcaNameAddress(), listOf(vcaIndex))
 
     // === Посыл канала на aux-шину (НЕ подтверждено реальным захватом) ===
     // В самом пульте это называется "SubSend", не "AuxSend" - у каждой из 16

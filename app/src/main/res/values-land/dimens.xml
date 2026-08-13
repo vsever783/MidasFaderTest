@@ -24,4 +24,14 @@
 
     <dimen name="top_bar_padding">4dp</dimen>
     <dimen name="status_text_v_padding">1dp</dimen>
+
+    <!-- Мониторный режим - альбомная ориентация -->
+    <dimen name="monitor_top_bar_padding">4dp</dimen>
+    <dimen name="monitor_connect_row_padding">4dp</dimen>
+    <dimen name="monitor_buslevel_padding">4dp</dimen>
+    <dimen name="monitor_bank_row_padding">2dp</dimen>
+    <dimen name="monitor_channel_header_padding">2dp</dimen>
+    <dimen name="monitor_channel_value_margin">2dp</dimen>
+    <dimen name="monitor_channel_strip_bottom_padding">4dp</dimen>
+    <dimen name="monitor_channel_fader_top_margin">1dp</dimen>
 </resources>

@@ -41,7 +41,10 @@ import java.nio.ByteBuffer
  *     which ones are confirmed vs. best-effort based on the address list.
  */
 // === Живая подписка на пульт (см. Pro2Commands.batchSubscribe) ===
-enum class ParamKind { FADER, MUTE, SOLO, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, AUX_SEND, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH }
+enum class ParamKind { FADER, MUTE, SOLO, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, AUX_SEND, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, PAN, PHANTOM, PHASE, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN }
+// Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX ШИНЫ, MASTER - мастер намеренно
+// в конце (по просьбе - обычно с ним работают реже всего).
+enum class StripMode { CHANNELS, AUX_RETURNS, AUX_BUS, VCA, MASTER }
 data class Subscription(val channel: Int, val kind: ParamKind, val auxBus: Int = 0, val eqBand: Int = 0)
 
 /** Последние известные значения одного канала - переживают поворот экрана (см. ConnectionHolder). */
@@ -58,6 +61,8 @@ data class ChannelData(
     var compThreshold: Float = 0f,
     var compMakeup: Float = 0f,
     var compInLocal: Boolean = false,
+    var compFiltersInLocal: Boolean = false,
+    var compFilterFreq: Float = 0f,
     // Посылы на 16 aux-шин (индекс 0 = aux 1, ... индекс 15 = aux 16).
     // НЕ подтверждено реальным захватом - см. заметку в Pro2Commands.
     val auxSends: FloatArray = FloatArray(16),
@@ -67,25 +72,50 @@ data class ChannelData(
     val eqBandActiveLocal: BooleanArray = BooleanArray(4),
     val eqFreq: FloatArray = FloatArray(4),
     val eqGain: FloatArray = FloatArray(4),
-    val eqWidth: FloatArray = FloatArray(4)
+    val eqWidth: FloatArray = FloatArray(4),
+    // Вход (INPUT) - pan/phantom ПОДТВЕРЖДЕНЫ реальным захватом, phase - по
+    // описанию в списке команд.
+    var pan: Float = 0.5f,
+    var phantomLocal: Boolean = false,
+    var phaseLocal: Boolean = false,
+    // Gate - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным захватом трафика iPad.
+    var gateInLocal: Boolean = false,
+    var gateThreshold: Float = 0f,
+    var gateRange: Float = 0f,
+    var gateAttack: Float = 0f,
+    var gateHold: Float = 0f,
+    var gateRelease: Float = 0f,
+    var gateTransient: Float = 0f,
+    var gateFilterFreq: Float = 0f,
+    var gateFiltersInLocal: Boolean = false
 )
 
 /** Состояние одного мастер-канала - НЕ подтверждено реальным захватом. */
 data class MasterData(
     var fader: Float = 0f,
-    var mutedLocal: Boolean = false
+    var mutedLocal: Boolean = false,
+    var name: String = ""
 )
 
 /** Состояние одного aux return - НЕ подтверждено реальным захватом. */
 data class AuxReturnData(
     var fader: Float = 0f,
-    var mutedLocal: Boolean = false
+    var mutedLocal: Boolean = false,
+    var name: String = ""
 )
 
 /** Состояние одной aux-шины (собственный уровень шины, не посыл с канала). */
 data class AuxBusData(
     var fader: Float = 0f,
-    var mutedLocal: Boolean = false
+    var mutedLocal: Boolean = false,
+    var name: String = "",
+    var colourArgb: Int? = null
+)
+
+data class VcaData(
+    var fader: Float = 0f,
+    var mutedLocal: Boolean = false,
+    var name: String = ""
 )
 
 /**
@@ -104,6 +134,15 @@ object ConnectionHolder {
     var consolePort: Int = 10000
     var sessionToken: Int? = null
     var subscribedAlready: Boolean = false
+    // Текущий выбранный банк каналов и режим (КАНАЛЫ/AUX/MASTER) - хранится
+    // здесь, а не в Activity, чтобы поворот экрана не сбрасывал выбор
+    // обратно на банк 1-8 / режим "каналы".
+    var uiBankStart: Int = 0
+    var uiStripMode: StripMode = StripMode.CHANNELS
+    // Режим приложения (инженер/монитор) и выбранная шина монитора -
+    // тоже переживают поворот экрана.
+    var uiAppMode: String = "engineer"
+    var uiMonitorSelectedBus: Int = -1
     // Уникальный для каждого подключения суффикс хендлов - чтобы старые
     // подписки от прошлых сессий (пульт, похоже, не всегда их сам заменяет,
     // а копит) не могли смешаться с текущими и вызывать хаотичные скачки
@@ -119,13 +158,17 @@ object ConnectionHolder {
     val auxSendsSubscribed = mutableSetOf<Int>()
     // Какие каналы уже подписаны на свой EQ (лениво, по требованию).
     val eqSubscribed = mutableSetOf<Int>()
+    val gateSubscribed = mutableSetOf<Int>()
     val channelData = Array(56) { ChannelData() }
     // По мануалу у Pro2 3 мастер-канала.
     val masterData = Array(3) { MasterData() }
     val auxReturnData = Array(8) { AuxReturnData() }
     val auxBusData = Array(16) { AuxBusData() }
+    val vcaData = Array(8) { VcaData() }
     // Отдельная карта для 16 aux-шин.
     val auxBusSubscriptions = mutableMapOf<String, Subscription>()
+    // Отдельная карта для VCA-групп (8 шт., подтверждено реальным захватом).
+    val vcaSubscriptions = mutableMapOf<String, Subscription>()
     // Отдельная карта для aux returns - индексы 0..7 пересекаются и с
     // обычными каналами, и с VCA в будущем.
     val auxSubscriptions = mutableMapOf<String, Subscription>()
@@ -142,6 +185,13 @@ object ConnectionHolder {
 }
 
 class MainActivity : AppCompatActivity() {
+
+    companion object {
+        const val EXTRA_APP_MODE = "app_mode"
+        const val MODE_ENGINEER = "engineer"
+        const val MODE_MONITOR = "monitor"
+    }
+    private var appMode: String = MODE_ENGINEER
 
     // Реальная конфигурация пульта Pro2 (подтверждено мануалом): 56 входных
     // каналов. Показываем по 8 за раз через переключение банков (см.
@@ -188,8 +238,10 @@ class MainActivity : AppCompatActivity() {
     private val masterSubscriptions get() = ConnectionHolder.masterSubscriptions
     private val auxSubscriptions get() = ConnectionHolder.auxSubscriptions
     private val auxBusSubscriptions get() = ConnectionHolder.auxBusSubscriptions
+    private val vcaSubscriptions get() = ConnectionHolder.vcaSubscriptions
     private val auxSendsSubscribed get() = ConnectionHolder.auxSendsSubscribed
     private val eqSubscribed get() = ConnectionHolder.eqSubscribed
+    private val gateSubscribed get() = ConnectionHolder.gateSubscribed
 
     private data class ChannelUi(
         val rootView: android.view.View,
@@ -233,12 +285,22 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+        appMode = intent.getStringExtra(EXTRA_APP_MODE) ?: ConnectionHolder.uiAppMode
+        ConnectionHolder.uiAppMode = appMode
 
-        // Убираем системную белую панель заголовка ("Midas Fader Test") -
-        // она отнимает заметную полосу по высоте, особенно чувствительно в
-        // альбомной ориентации, где вертикального места и так впритык.
+        // Убираем системную белую панель заголовка - она отнимает заметную
+        // полосу по высоте, особенно чувствительно в альбомной ориентации.
         supportActionBar?.hide()
+
+        if (appMode == MODE_MONITOR) {
+            onCreateMonitor()
+        } else {
+            onCreateEngineer()
+        }
+    }
+
+    private fun onCreateEngineer() {
+        setContentView(R.layout.activity_main)
 
         editHost = findViewById(R.id.editHost)
         editPort = findViewById(R.id.editPort)
@@ -253,6 +315,7 @@ class MainActivity : AppCompatActivity() {
         buildMasterStrips()
         buildAuxStrips()
         buildAuxBusStrips()
+        buildVcaStrips()
         buildModeButtons()
 
         btnConnect.setOnClickListener { connectAndSync() }
@@ -275,6 +338,279 @@ class MainActivity : AppCompatActivity() {
             restoreUiFromChannelData()
             startReceiveLoop(existingSocket)
             startPollLoop(existingSocket, existingAddress, consolePort)
+        }
+    }
+
+    // ============================================================
+    // === МОНИТОРНЫЙ РЕЖИМ - использует ТОТ ЖЕ ConnectionHolder и
+    // тот же порт 10001, что и инженерский. Раньше это было отдельное
+    // приложение со своим сокетом на порту 10002 - но пульт различает
+    // клиентов только по IP-адресу (не по порту), и при одновременной
+    // работе обоих режимов с одного телефона пульт слал все ответы
+    // только одному из них (подтверждено реальным захватом трафика).
+    // Отсюда и объединение в один режим/один порт.
+    // ============================================================
+
+    private var monitorSelectedBus: Int = -1
+    private var monitorBusFader: SeekBar? = null
+    private var monitorBusMuteButton: Button? = null
+    private var monitorBusMutedLocal = false
+    private var monitorChannelStrips: Array<Pair<SeekBar, TextView>?> = arrayOfNulls(56)
+    private var monitorChannelLabels: Array<TextView?> = arrayOfNulls(56)
+    private val monitorBankButtons = mutableListOf<Button>()
+    private var monitorBankStart = 0
+
+    private fun onCreateMonitor() {
+        setContentView(R.layout.activity_monitor_connect)
+
+        editHost = findViewById(R.id.editHost)
+        editPort = findViewById(R.id.editPort)
+        btnConnect = findViewById(R.id.btnConnect)
+        textStatus = findViewById(R.id.textStatus)
+        textConnectionStatus = findViewById(R.id.textConnectionStatus)
+
+        btnConnect.setOnClickListener {
+            connectAndSync()
+            // Список шин будет заполняться по мере прихода имён (см.
+            // updateAuxBusNameForMonitorList, вызывается из уже
+            // существующего разбора ParamKind.NAME для aux-шин).
+            findViewById<android.widget.LinearLayout>(R.id.containerBuses).postDelayed(
+                { buildMonitorBusList() }, 800
+            )
+        }
+
+        // Восстановление после поворота экрана - если уже подключены,
+        // сразу показываем список шин (или экран выбранной шины).
+        if (socket != null) {
+            textConnectionStatus.text = "● Подключено"
+            textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
+            buildMonitorBusList()
+            if (ConnectionHolder.uiMonitorSelectedBus >= 0) {
+                openMonitorBus(ConnectionHolder.uiMonitorSelectedBus)
+            }
+        }
+    }
+
+    /** Список шин на экране подключения монитора - имена подтягиваются по мере прихода push. */
+    private fun buildMonitorBusList() {
+        val container = findViewById<android.widget.LinearLayout>(R.id.containerBuses)
+        container.removeAllViews()
+        for (b in 0 until 16) {
+            val data = ConnectionHolder.auxBusData[b]
+            val btn = Button(this)
+            btn.text = if (data.name.isNotBlank()) "BUS ${b + 1} — ${data.name}" else "BUS ${b + 1}"
+            btn.setTextColor(Color.parseColor("#ffffff"))
+            btn.backgroundTintList = null
+            btn.setBackgroundColor(Color.parseColor("#3a3a3c"))
+            val params = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            params.bottomMargin = 8
+            btn.layoutParams = params
+            btn.setOnClickListener { openMonitorBus(b) }
+            container.addView(btn)
+        }
+    }
+
+    /** Открывает экран выбранной шины: посылы всех 56 каналов + громкость/mute самой шины. */
+    private fun openMonitorBus(bus: Int) {
+        monitorSelectedBus = bus
+        ConnectionHolder.uiMonitorSelectedBus = bus
+        setContentView(R.layout.activity_monitor_bus)
+
+        val busData = ConnectionHolder.auxBusData[bus]
+        findViewById<TextView>(R.id.textMonitorBusName).text =
+            if (busData.name.isNotBlank()) "BUS ${bus + 1} — ${busData.name}" else "BUS ${bus + 1}"
+
+        findViewById<Button>(R.id.btnMonitorBack).setOnClickListener {
+            monitorSelectedBus = -1
+            ConnectionHolder.uiMonitorSelectedBus = -1
+            onCreateMonitor()
+        }
+
+        val busFader = findViewById<SeekBar>(R.id.seekMonitorBusLevel)
+        val busMute = findViewById<Button>(R.id.btnMonitorBusMute)
+        monitorBusFader = busFader
+        monitorBusMuteButton = busMute
+        busFader.progress = (busData.fader * 1000).toInt()
+        busMute.backgroundTintList = null
+        monitorBusMutedLocal = busData.mutedLocal
+        busMute.setBackgroundColor(Color.parseColor(if (busData.mutedLocal) "#ff3b30" else "#3a3a3c"))
+
+        busFader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            var lastSend = 0L
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                val level = progress / 1000f
+                ConnectionHolder.auxBusData[bus].fader = level
+                val now = System.currentTimeMillis()
+                if (now - lastSend >= minSendIntervalMs) {
+                    lastSend = now
+                    sendAuxBusFader(bus, level)
+                }
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                val level = (sb?.progress ?: 0) / 1000f
+                ConnectionHolder.auxBusData[bus].fader = level
+                sendAuxBusFader(bus, level)
+            }
+        })
+        busMute.setOnClickListener {
+            monitorBusMutedLocal = !monitorBusMutedLocal
+            busMute.setBackgroundColor(Color.parseColor(if (monitorBusMutedLocal) "#ff3b30" else "#3a3a3c"))
+            ConnectionHolder.auxBusData[bus].mutedLocal = monitorBusMutedLocal
+            sendAuxBusMute(bus, true)
+        }
+
+        buildMonitorBankButtons()
+        subscribeChannelSendsForBus(bus)
+    }
+
+    private fun buildMonitorBankButtons() {
+        val row = findViewById<android.widget.LinearLayout>(R.id.monitorBankButtonsRow)
+        row.removeAllViews()
+        monitorBankButtons.clear()
+        val bankCount = (numChannels + channelsPerBank - 1) / channelsPerBank
+        for (bk in 0 until bankCount) {
+            val start = bk * channelsPerBank
+            val end = minOf(start + channelsPerBank, numChannels)
+            val btn = Button(this)
+            btn.text = "${start + 1}-$end"
+            btn.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, resources.getDimension(R.dimen.bank_button_text_size))
+            btn.backgroundTintList = null
+            btn.minHeight = 0
+            val vPad = resources.getDimensionPixelSize(R.dimen.bank_button_v_padding)
+            btn.setPadding(24, vPad, 24, vPad)
+            btn.setTextColor(Color.parseColor("#ffffff"))
+            btn.setBackgroundColor(Color.parseColor("#3a3a3c"))
+            val params = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            params.marginEnd = 8
+            btn.layoutParams = params
+            btn.setOnClickListener { switchMonitorBank(start) }
+            row.addView(btn)
+            monitorBankButtons.add(btn)
+        }
+        switchMonitorBank(0)
+    }
+
+    private fun switchMonitorBank(start: Int) {
+        monitorBankStart = start
+        for ((idx, btn) in monitorBankButtons.withIndex()) {
+            val active = idx * channelsPerBank == start
+            btn.setBackgroundColor(Color.parseColor(if (active) "#ff9f0a" else "#3a3a3c"))
+            btn.setTextColor(Color.parseColor(if (active) "#000000" else "#ffffff"))
+        }
+        buildMonitorChannelStrips(monitorSelectedBus, start)
+    }
+
+    /**
+     * Строит полосы каналов для монитора - показывает посыл каждого из 8
+     * каналов текущего банка в выбранную шину. Фейдер занимает всю
+     * выделенную высоту (запрошено), с той же адаптивной подгонкой ширины
+     * повёрнутого SeekBar, что и в инженерском режиме.
+     */
+    private fun buildMonitorChannelStrips(bus: Int, bankStart: Int) {
+        val container = findViewById<android.widget.LinearLayout>(R.id.containerMonitorChannels)
+        container.removeAllViews()
+        val inflater = LayoutInflater.from(this)
+        for (i in bankStart until minOf(bankStart + channelsPerBank, numChannels)) {
+            val strip = inflater.inflate(R.layout.channel_strip_monitor, container, false)
+            val label = strip.findViewById<TextView>(R.id.textMonitorChannelLabel)
+            val valueText = strip.findViewById<TextView>(R.id.textMonitorSendValue)
+            val seek = strip.findViewById<SeekBar>(R.id.seekMonitorSend)
+            val sendContainer = strip.findViewById<android.widget.FrameLayout>(R.id.monitorSendContainer)
+
+            val chData = ConnectionHolder.channelData[i]
+            label.text = if (chData.name.isNotBlank()) chData.name else "CH ${i + 1}"
+            chData.colourArgb?.let {
+                strip.findViewById<android.view.View>(R.id.monitorChannelHeader).setBackgroundColor(it)
+            }
+            val level = chData.auxSends.getOrElse(bus) { 0f }
+            seek.progress = (level * 1000).toInt()
+            valueText.text = "%.2f".format(level)
+
+            // Та же подгонка ширины повёрнутого фейдера под реальную высоту,
+            // что и везде в приложении - фейдер тянется на всю доступную
+            // область канала целиком.
+            sendContainer.viewTreeObserver.addOnGlobalLayoutListener(
+                object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                    override fun onGlobalLayout() {
+                        val h = sendContainer.height
+                        if (h > 0) {
+                            val p = seek.layoutParams
+                            if (p.width != h) {
+                                p.width = h
+                                seek.layoutParams = p
+                            }
+                            sendContainer.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                        }
+                    }
+                }
+            )
+
+            var lastSend = 0L
+            val channelIndex = i
+            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                    val lvl = progress / 1000f
+                    valueText.text = "%.2f".format(lvl)
+                    if (!fromUser) return
+                    ConnectionHolder.channelData[channelIndex].auxSends[bus] = lvl
+                    val now = System.currentTimeMillis()
+                    if (now - lastSend >= minSendIntervalMs) {
+                        lastSend = now
+                        sendSubSend(channelIndex, bus + 1, lvl)
+                    }
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {
+                    val lvl = (sb?.progress ?: 0) / 1000f
+                    ConnectionHolder.channelData[channelIndex].auxSends[bus] = lvl
+                    sendSubSend(channelIndex, bus + 1, lvl)
+                }
+            })
+
+            monitorChannelStrips[i] = seek to valueText
+            monitorChannelLabels[i] = label
+            container.addView(strip)
+        }
+    }
+
+    /**
+     * Подписывается на посылы ВСЕХ 56 каналов в ОДНУ конкретную шину (не то
+     * же самое, что подписка на все 16 шин ОДНОГО канала во вкладке SENDS
+     * инженерского режима - там другой порядок перебора).
+     */
+    private fun subscribeChannelSendsForBus(bus: Int) {
+        val sock = socket ?: return
+        val address = consoleAddress ?: return
+        val port = consolePort
+        val token = sessionToken ?: return
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val sid = sessionId
+            for (ch in 0 until numChannels) {
+                val handle = "/h_${sid}_${ch}_msend${bus}"
+                withContext(Dispatchers.Main) { subscriptions[handle] = Subscription(ch, ParamKind.AUX_SEND, bus + 1) }
+                try {
+                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, Pro2Commands.subSendLevelAddress(bus + 1), ch, ch, token))
+                } catch (e: Exception) {
+                    // не критично - не прерываем остальные
+                }
+                // Заодно и имена каналов - вдруг ещё не подписаны.
+                val nameHandle = "/h_${sid}_${ch}_mname"
+                withContext(Dispatchers.Main) { subscriptions[nameHandle] = Subscription(ch, ParamKind.NAME) }
+                try {
+                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(nameHandle, Pro2Commands.nameAddress(), ch, ch, token))
+                } catch (e: Exception) {
+                    // не критично
+                }
+            }
         }
     }
 
@@ -432,6 +768,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun switchBank(bankStart: Int) {
         currentBankStart = bankStart
+        ConnectionHolder.uiBankStart = bankStart
         for (i in 0 until numChannels) {
             channels[i].rootView.visibility =
                 if (i >= bankStart && i < bankStart + channelsPerBank) android.view.View.VISIBLE
@@ -477,7 +814,9 @@ class MainActivity : AppCompatActivity() {
             row.addView(btn)
             bankButtons.add(btn)
         }
-        switchBank(0)
+        // Восстанавливаем банк, выбранный до пересоздания Activity (поворот
+        // экрана), вместо того чтобы всегда сбрасывать на 1-8.
+        switchBank(ConnectionHolder.uiBankStart)
     }
 
     /**
@@ -490,6 +829,8 @@ class MainActivity : AppCompatActivity() {
     /** Лёгкая версия ChannelUi для мастера/aux - без gain/comp/sends/detail-экрана. */
     private data class SimpleStripUi(
         val rootView: android.view.View,
+        val labelView: TextView,
+        val headerView: android.view.View,
         val fader: SeekBar,
         val levelText: TextView,
         val muteButton: Button,
@@ -502,6 +843,7 @@ class MainActivity : AppCompatActivity() {
     private val masterStrips = mutableListOf<SimpleStripUi>()
     private val auxStrips = mutableListOf<SimpleStripUi>()
     private val auxBusStrips = mutableListOf<SimpleStripUi>()
+    private val vcaStrips = mutableListOf<SimpleStripUi>()
 
     /**
      * Строит одну упрощённую полосу (шапка+SOLO+метр/фейдер+MUTE) в
@@ -540,7 +882,7 @@ class MainActivity : AppCompatActivity() {
         muteButton.setBackgroundColor(Color.parseColor("#3a3a3c"))
         soloButton.setBackgroundColor(Color.parseColor("#3a3a3c"))
 
-        val ui = SimpleStripUi(strip, fader, levelText, muteButton, soloButton, meterBar)
+        val ui = SimpleStripUi(strip, labelView, headerView, fader, levelText, muteButton, soloButton, meterBar)
 
         faderContainer.viewTreeObserver.addOnGlobalLayoutListener(
             object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
@@ -611,7 +953,7 @@ class MainActivity : AppCompatActivity() {
             val ui = buildSimpleStrip(
                 container, "M ${m + 1}", data.fader, data.mutedLocal,
                 onFader = { level -> ConnectionHolder.masterData[m].fader = level; sendMasterFader(m, level) },
-                onMute = { muted -> ConnectionHolder.masterData[m].mutedLocal = muted; sendMasterMute(m, muted) },
+                onMute = { muted -> ConnectionHolder.masterData[m].mutedLocal = muted; sendMasterMute(m, true) },
                 onSolo = { soloed -> sendMasterSolo(m, soloed) }
             )
             masterStrips.add(ui)
@@ -628,7 +970,7 @@ class MainActivity : AppCompatActivity() {
             val ui = buildSimpleStrip(
                 container, "AUX ${a + 1}", data.fader, data.mutedLocal,
                 onFader = { level -> ConnectionHolder.auxReturnData[a].fader = level; sendAuxReturnFader(a, level) },
-                onMute = { muted -> ConnectionHolder.auxReturnData[a].mutedLocal = muted; sendAuxReturnMute(a, muted) },
+                onMute = { muted -> ConnectionHolder.auxReturnData[a].mutedLocal = muted; sendAuxReturnMute(a, true) },
                 onSolo = { soloed -> sendAuxReturnSolo(a, soloed) }
             )
             auxStrips.add(ui)
@@ -645,16 +987,32 @@ class MainActivity : AppCompatActivity() {
             val ui = buildSimpleStrip(
                 container, "BUS ${b + 1}", data.fader, data.mutedLocal,
                 onFader = { level -> ConnectionHolder.auxBusData[b].fader = level; sendAuxBusFader(b, level) },
-                onMute = { muted -> ConnectionHolder.auxBusData[b].mutedLocal = muted; sendAuxBusMute(b, muted) },
+                onMute = { muted -> ConnectionHolder.auxBusData[b].mutedLocal = muted; sendAuxBusMute(b, true) },
                 onSolo = { soloed -> sendAuxBusSolo(b, soloed) }
             )
             auxBusStrips.add(ui)
         }
     }
 
+    /** VCA-группы (8 шт.) - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным трафиком iPad. */
+    private fun buildVcaStrips() {
+        val container = findViewById<android.widget.LinearLayout>(R.id.containerVca)
+        container.removeAllViews()
+        vcaStrips.clear()
+        for (v in 0 until 8) {
+            val data = ConnectionHolder.vcaData[v]
+            val ui = buildSimpleStrip(
+                container, "VCA ${v + 1}", data.fader, data.mutedLocal,
+                onFader = { level -> ConnectionHolder.vcaData[v].fader = level; sendVcaFader(v, level) },
+                onMute = { muted -> ConnectionHolder.vcaData[v].mutedLocal = muted; sendVcaMute(v, true) },
+                onSolo = { soloed -> sendVcaSolo(v, soloed) }
+            )
+            vcaStrips.add(ui)
+        }
+    }
+
     // Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX BUSES, MASTER - мастер
     // намеренно в конце, по просьбе (обычно с ним работают реже всего).
-    private enum class StripMode { CHANNELS, AUX_RETURNS, AUX_BUS, MASTER }
     private var currentStripMode = StripMode.CHANNELS
 
     private fun buildModeButtons() {
@@ -684,31 +1042,36 @@ class MainActivity : AppCompatActivity() {
             return btn
         }
 
-        // Порядок как попросили: каналы, aux returns, aux-шины, мастер - в конце.
+        // Порядок как попросили: каналы, aux returns, aux-шины, VCA, мастер - в конце.
         val btnChannels = makeTab("КАНАЛЫ", StripMode.CHANNELS)
         val btnAux = makeTab("AUX RETURNS", StripMode.AUX_RETURNS)
         val btnAuxBus = makeTab("AUX ШИНЫ", StripMode.AUX_BUS)
+        val btnVca = makeTab("VCA", StripMode.VCA)
         val btnMaster = makeTab("MASTER", StripMode.MASTER)
         modeButtons = mapOf(
             StripMode.CHANNELS to btnChannels,
             StripMode.AUX_RETURNS to btnAux,
             StripMode.AUX_BUS to btnAuxBus,
+            StripMode.VCA to btnVca,
             StripMode.MASTER to btnMaster
         )
 
-        switchStripMode(StripMode.CHANNELS)
+        switchStripMode(ConnectionHolder.uiStripMode)
     }
 
     private var modeButtons: Map<StripMode, Button> = emptyMap()
 
     private fun switchStripMode(mode: StripMode) {
         currentStripMode = mode
+        ConnectionHolder.uiStripMode = mode
         findViewById<android.view.View>(R.id.containerChannels).visibility =
             if (mode == StripMode.CHANNELS) android.view.View.VISIBLE else android.view.View.GONE
         findViewById<android.view.View>(R.id.containerAux).visibility =
             if (mode == StripMode.AUX_RETURNS) android.view.View.VISIBLE else android.view.View.GONE
         findViewById<android.view.View>(R.id.containerAuxBus).visibility =
             if (mode == StripMode.AUX_BUS) android.view.View.VISIBLE else android.view.View.GONE
+        findViewById<android.view.View>(R.id.containerVca).visibility =
+            if (mode == StripMode.VCA) android.view.View.VISIBLE else android.view.View.GONE
         findViewById<android.view.View>(R.id.containerMaster).visibility =
             if (mode == StripMode.MASTER) android.view.View.VISIBLE else android.view.View.GONE
         // Банки (1-8, 9-16 и т.д.) относятся только к обычным входным каналам.
@@ -741,8 +1104,10 @@ class MainActivity : AppCompatActivity() {
         masterSubscriptions.clear()
         auxSubscriptions.clear()
         auxBusSubscriptions.clear()
+        vcaSubscriptions.clear()
         auxSendsSubscribed.clear()
         eqSubscribed.clear()
+        gateSubscribed.clear()
         sessionId = System.currentTimeMillis().toString(36)
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -900,6 +1265,12 @@ class MainActivity : AppCompatActivity() {
             handleAuxBusSubscribedValue(auxBusSub, blob)
             return
         }
+        val vcaSub = vcaSubscriptions[message.address]
+        if (vcaSub != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
+            val blob = message.args[0] as? ByteArray ?: return
+            handleVcaSubscribedValue(vcaSub, blob)
+            return
+        }
 
         // Путь 2: человекочитаемый адрес (см. примечание выше - по факту не срабатывает,
         // оставлено на будущее / на случай другой прошивки пульта).
@@ -971,6 +1342,11 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_${i}_compthreshold" to Triple(Pro2Commands.compThresholdAddress(), ParamKind.COMP_THRESHOLD, i),
                     "/h_${sid}_${i}_compmakeup" to Triple(Pro2Commands.compMakeupGainAddress(), ParamKind.COMP_MAKEUP, i),
                     "/h_${sid}_${i}_compin" to Triple(Pro2Commands.compInAddress(), ParamKind.COMP_IN, i),
+                    "/h_${sid}_${i}_pan" to Triple(Pro2Commands.panAddress(), ParamKind.PAN, i),
+                    "/h_${sid}_${i}_phantom" to Triple(Pro2Commands.phantomPowerAddress(), ParamKind.PHANTOM, i),
+                    "/h_${sid}_${i}_phase" to Triple(Pro2Commands.phaseAddress(), ParamKind.PHASE, i),
+                    "/h_${sid}_${i}_compflt" to Triple(Pro2Commands.compFiltersInAddress(), ParamKind.COMP_FILTERS_IN, i),
+                    "/h_${sid}_${i}_compfltfreq" to Triple(Pro2Commands.compFilterFreqAddress(), ParamKind.COMP_FILTER_FREQ, i),
                 )
                 for ((handle, info) in subs) {
                     val (path, kind, channel) = info
@@ -992,6 +1368,7 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_m${m}_mute" to Triple(Pro2Commands.masterMuteAddress(), ParamKind.MUTE, m),
                     "/h_${sid}_m${m}_solo" to Triple(Pro2Commands.masterSoloAddress(), ParamKind.SOLO, m),
                     "/h_${sid}_m${m}_meter" to Triple(Pro2Commands.masterMeterAddress(), ParamKind.METER, m),
+                    "/h_${sid}_m${m}_name" to Triple(Pro2Commands.masterNameAddress(), ParamKind.NAME, m),
                 )
                 for ((handle, info) in masterSubs) {
                     val (path, kind, mIdx) = info
@@ -1012,6 +1389,7 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_a${a}_mute" to Triple(Pro2Commands.auxReturnMuteAddress(), ParamKind.MUTE, a),
                     "/h_${sid}_a${a}_solo" to Triple(Pro2Commands.auxReturnSoloAddress(), ParamKind.SOLO, a),
                     "/h_${sid}_a${a}_meter" to Triple(Pro2Commands.auxReturnMeterAddress(), ParamKind.METER, a),
+                    "/h_${sid}_a${a}_name" to Triple(Pro2Commands.auxReturnNameAddress(), ParamKind.NAME, a),
                 )
                 for ((handle, info) in auxSubs) {
                     val (path, kind, aIdx) = info
@@ -1033,12 +1411,33 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_b${b}_mute" to Triple(Pro2Commands.auxBusMuteAddress(), ParamKind.MUTE, b),
                     "/h_${sid}_b${b}_solo" to Triple(Pro2Commands.auxBusSoloAddress(), ParamKind.SOLO, b),
                     "/h_${sid}_b${b}_meter" to Triple(Pro2Commands.auxBusMeterAddress(), ParamKind.METER, b),
+                    "/h_${sid}_b${b}_name" to Triple(Pro2Commands.auxBusNameAddress(), ParamKind.NAME, b),
+                    "/h_${sid}_b${b}_colour" to Triple(Pro2Commands.auxBusColourAddress(), ParamKind.COLOUR, b),
                 )
                 for ((handle, info) in busSubs) {
                     val (path, kind, bIdx) = info
                     withContext(Dispatchers.Main) { auxBusSubscriptions[handle] = Subscription(bIdx, kind) }
                     try {
                         sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, bIdx, bIdx, token))
+                    } catch (e: Exception) {
+                        // не критично - не прерываем остальное
+                    }
+                }
+            }
+
+            // VCA-группы (8 шт.) - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным трафиком iPad.
+            for (v in 0 until 8) {
+                val vcaSubs = listOf(
+                    "/h_${sid}_v${v}_fader" to Triple(Pro2Commands.vcaFaderAddress(), ParamKind.FADER, v),
+                    "/h_${sid}_v${v}_mute" to Triple(Pro2Commands.vcaMuteAddress(), ParamKind.MUTE, v),
+                    "/h_${sid}_v${v}_solo" to Triple(Pro2Commands.vcaSoloAddress(), ParamKind.SOLO, v),
+                    "/h_${sid}_v${v}_name" to Triple(Pro2Commands.vcaNameAddress(), ParamKind.NAME, v),
+                )
+                for ((handle, info) in vcaSubs) {
+                    val (path, kind, vIdx) = info
+                    withContext(Dispatchers.Main) { vcaSubscriptions[handle] = Subscription(vIdx, kind) }
+                    try {
+                        sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, vIdx, vIdx, token))
                     } catch (e: Exception) {
                         // не критично - не прерываем остальное
                     }
@@ -1107,6 +1506,40 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) { subscriptions[handle] = sub }
                 try {
                     sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, channel, channel, token))
+                } catch (e: Exception) {
+                    // не критично
+                }
+            }
+        }
+    }
+
+    /** Лениво подписывается на 9 параметров Gate одного канала. */
+    private fun subscribeGate(channel: Int) {
+        val sock = socket ?: return
+        val address = consoleAddress ?: return
+        val port = consolePort
+        val token = sessionToken ?: return
+        if (gateSubscribed.contains(channel)) return
+        gateSubscribed.add(channel)
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val sid = sessionId
+            val subs = listOf(
+                "/h_${sid}_${channel}_gatein" to Triple(Pro2Commands.gateInAddress(), ParamKind.GATE_IN, channel),
+                "/h_${sid}_${channel}_gatethr" to Triple(Pro2Commands.gateThresholdAddress(), ParamKind.GATE_THRESHOLD, channel),
+                "/h_${sid}_${channel}_gaterange" to Triple(Pro2Commands.gateRangeAddress(), ParamKind.GATE_RANGE, channel),
+                "/h_${sid}_${channel}_gateatk" to Triple(Pro2Commands.gateAttackAddress(), ParamKind.GATE_ATTACK, channel),
+                "/h_${sid}_${channel}_gatehold" to Triple(Pro2Commands.gateHoldAddress(), ParamKind.GATE_HOLD, channel),
+                "/h_${sid}_${channel}_gaterel" to Triple(Pro2Commands.gateReleaseAddress(), ParamKind.GATE_RELEASE, channel),
+                "/h_${sid}_${channel}_gatetrans" to Triple(Pro2Commands.gateTransientAddress(), ParamKind.GATE_TRANSIENT, channel),
+                "/h_${sid}_${channel}_gatefreq" to Triple(Pro2Commands.gateFilterFreqAddress(), ParamKind.GATE_FILTER_FREQ, channel),
+                "/h_${sid}_${channel}_gateflt" to Triple(Pro2Commands.gateFiltersInAddress(), ParamKind.GATE_FILTERS_IN, channel),
+            )
+            for ((handle, info) in subs) {
+                val (path, kind, ch) = info
+                withContext(Dispatchers.Main) { subscriptions[handle] = Subscription(ch, kind) }
+                try {
+                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, ch, ch, token))
                 } catch (e: Exception) {
                     // не критично
                 }
@@ -1204,6 +1637,26 @@ class MainActivity : AppCompatActivity() {
                     ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
                 updateCompInUi(sub.channel, on)
             }
+            ParamKind.COMP_FILTERS_IN -> {
+                val on = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.channelData[sub.channel].compFiltersInLocal = on
+                if (openDetailChannel == sub.channel) {
+                    detailCompFiltersInButton?.text = if (on) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+                    detailCompFiltersInButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+                }
+            }
+            ParamKind.COMP_FILTER_FREQ -> {
+                if (blob.size >= 4) {
+                    val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        .float.coerceIn(0f, 1f)
+                    ConnectionHolder.channelData[sub.channel].compFilterFreq = level
+                    if (openDetailChannel == sub.channel) {
+                        detailCompFilterFreqSeek?.progress = (level * 1000).toInt()
+                        detailCompFilterFreqText?.text = "%.2f".format(level)
+                    }
+                }
+            }
             ParamKind.AUX_SEND -> {
                 // НЕ подтверждено реальным захватом - по аналогии с gain/fader
                 // (тот же тип enPPCRotaryMessage), пробуем little-endian float32.
@@ -1228,6 +1681,42 @@ class MainActivity : AppCompatActivity() {
                     val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN)
                         .float.coerceIn(0f, 1f)
                     updateEqParamUi(sub.channel, sub.eqBand, sub.kind, level)
+                }
+            }
+            ParamKind.PAN -> {
+                if (blob.size >= 4) {
+                    val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        .float.coerceIn(0f, 1f)
+                    updatePanUi(sub.channel, level)
+                }
+            }
+            ParamKind.PHANTOM -> {
+                val on = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                updatePhantomUi(sub.channel, on)
+            }
+            ParamKind.PHASE -> {
+                val on = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                updatePhaseUi(sub.channel, on)
+            }
+            ParamKind.GATE_IN -> {
+                val on = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                updateGateInUi(sub.channel, on)
+            }
+            ParamKind.GATE_FILTERS_IN -> {
+                val on = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                updateGateFiltersInUi(sub.channel, on)
+            }
+            ParamKind.GATE_THRESHOLD, ParamKind.GATE_RANGE, ParamKind.GATE_ATTACK,
+            ParamKind.GATE_HOLD, ParamKind.GATE_RELEASE, ParamKind.GATE_TRANSIENT,
+            ParamKind.GATE_FILTER_FREQ -> {
+                if (blob.size >= 4) {
+                    val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        .float.coerceIn(0f, 1f)
+                    updateGateParamUi(sub.channel, sub.kind, level)
                 }
             }
         }
@@ -1257,6 +1746,12 @@ class MainActivity : AppCompatActivity() {
                 val level = ((blob[0].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
                 updateSimpleStripMeter(masterStrips, sub.channel, level)
             }
+            ParamKind.NAME -> {
+                val name = String(blob, Charsets.US_ASCII).trimEnd('\u0000')
+                if (name.isBlank()) return
+                ConnectionHolder.masterData.getOrNull(sub.channel)?.name = name
+                masterStrips.getOrNull(sub.channel)?.labelView?.text = name
+            }
             else -> {}
         }
     }
@@ -1285,6 +1780,12 @@ class MainActivity : AppCompatActivity() {
                 val level = ((blob[0].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
                 updateSimpleStripMeter(auxStrips, sub.channel, level)
             }
+            ParamKind.NAME -> {
+                val name = String(blob, Charsets.US_ASCII).trimEnd('\u0000')
+                if (name.isBlank()) return
+                ConnectionHolder.auxReturnData.getOrNull(sub.channel)?.name = name
+                auxStrips.getOrNull(sub.channel)?.labelView?.text = name
+            }
             else -> {}
         }
     }
@@ -1297,6 +1798,9 @@ class MainActivity : AppCompatActivity() {
                 val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN)
                     .float.coerceIn(0f, 1f)
                 ConnectionHolder.auxBusData[sub.channel].fader = level
+                if (appMode == MODE_MONITOR && monitorSelectedBus == sub.channel) {
+                    monitorBusFader?.progress = (level * 1000).toInt()
+                }
                 val ui = auxBusStrips.getOrNull(sub.channel) ?: return
                 ui.suppressEvents = true
                 ui.fader.progress = (level * 1000).toInt()
@@ -1307,6 +1811,10 @@ class MainActivity : AppCompatActivity() {
                 val muted = blob.size >= 4 &&
                     ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
                 ConnectionHolder.auxBusData[sub.channel].mutedLocal = muted
+                if (appMode == MODE_MONITOR && monitorSelectedBus == sub.channel) {
+                    monitorBusMutedLocal = muted
+                    monitorBusMuteButton?.setBackgroundColor(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
+                }
                 val ui = auxBusStrips.getOrNull(sub.channel) ?: return
                 ui.mutedLocal = muted
                 ui.muteButton.setBackgroundColor(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
@@ -1324,6 +1832,66 @@ class MainActivity : AppCompatActivity() {
                 if (blob.isEmpty()) return
                 val level = ((blob[0].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
                 updateSimpleStripMeter(auxBusStrips, sub.channel, level)
+            }
+            ParamKind.NAME -> {
+                val name = String(blob, Charsets.US_ASCII).trimEnd('\u0000')
+                if (name.isBlank()) return
+                ConnectionHolder.auxBusData.getOrNull(sub.channel)?.name = name
+                auxBusStrips.getOrNull(sub.channel)?.labelView?.text = name
+            }
+            ParamKind.COLOUR -> {
+                // Тот же подтверждённый формат, что и у каналов: 4 байта в
+                // порядке R, G, B, A (не обычный ARGB).
+                if (blob.size >= 4) {
+                    val r = blob[0].toInt() and 0xFF
+                    val g = blob[1].toInt() and 0xFF
+                    val b = blob[2].toInt() and 0xFF
+                    val a = blob[3].toInt() and 0xFF
+                    val argb = (a shl 24) or (r shl 16) or (g shl 8) or b
+                    ConnectionHolder.auxBusData.getOrNull(sub.channel)?.colourArgb = argb
+                    auxBusStrips.getOrNull(sub.channel)?.headerView?.setBackgroundColor(argb)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Разбор push-обновления для VCA-групп - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным захватом трафика iPad. */
+    private fun handleVcaSubscribedValue(sub: Subscription, blob: ByteArray) {
+        when (sub.kind) {
+            ParamKind.FADER -> {
+                if (blob.size < 4) return
+                val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                    .float.coerceIn(0f, 1f)
+                ConnectionHolder.vcaData[sub.channel].fader = level
+                val ui = vcaStrips.getOrNull(sub.channel) ?: return
+                ui.suppressEvents = true
+                ui.fader.progress = (level * 1000).toInt()
+                ui.levelText.text = "%.2f".format(level)
+                ui.suppressEvents = false
+            }
+            ParamKind.MUTE -> {
+                val muted = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.vcaData[sub.channel].mutedLocal = muted
+                val ui = vcaStrips.getOrNull(sub.channel) ?: return
+                ui.mutedLocal = muted
+                ui.muteButton.setBackgroundColor(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
+            }
+            ParamKind.SOLO -> {
+                val soloed = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                val ui = vcaStrips.getOrNull(sub.channel) ?: return
+                ui.suppressEvents = true
+                ui.soloButton.isChecked = soloed
+                ui.soloButton.setBackgroundColor(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
+                ui.suppressEvents = false
+            }
+            ParamKind.NAME -> {
+                val name = String(blob, Charsets.US_ASCII).trimEnd('\u0000')
+                if (name.isBlank()) return
+                ConnectionHolder.vcaData.getOrNull(sub.channel)?.name = name
+                vcaStrips.getOrNull(sub.channel)?.labelView?.text = name
             }
             else -> {}
         }
@@ -1418,6 +1986,20 @@ class MainActivity : AppCompatActivity() {
     )
     private data class EqBlockViews(val inButton: Button, val bands: Array<EqBandViews>)
     private var detailEqViews: EqBlockViews? = null
+    // Живые ссылки на виджеты вкладки INPUT/GATE, пока детальный экран
+    // открыт - для подкрутки от push (тот же паттерн, что и detailEqViews).
+    private var detailPanSeek: SeekBar? = null
+    private var detailPanText: TextView? = null
+    private var detailPhantomButton: Button? = null
+    private var detailPhaseButton: Button? = null
+    private var detailGateInButton: Button? = null
+    private var detailGateFiltersInButton: Button? = null
+    // Порядок соответствует makeRow() в buildGateBlock(): threshold, range,
+    // attack, hold, release, transient, filter freq.
+    private var detailGateParamViews: Array<Pair<SeekBar, TextView>?> = arrayOfNulls(7)
+    private var detailCompFilterFreqSeek: SeekBar? = null
+    private var detailCompFilterFreqText: TextView? = null
+    private var detailCompFiltersInButton: Button? = null
 
     private data class CompSliderViews(
         val ratio: SeekBar, val ratioText: TextView,
@@ -1486,6 +2068,13 @@ class MainActivity : AppCompatActivity() {
         // подкручиваем нужный ползунок вживую.
         if (openDetailChannel == channel) {
             val pair = detailSendViews?.getOrNull(busNumber - 1) ?: return
+            pair.first.progress = (level * 1000).toInt()
+            pair.second.text = "%.2f".format(level)
+        }
+        // Если в мониторном режиме сейчас открыта именно эта шина - тоже
+        // подкручиваем соответствующий канал вживую.
+        if (appMode == MODE_MONITOR && monitorSelectedBus == busNumber - 1) {
+            val pair = monitorChannelStrips.getOrNull(channel) ?: return
             pair.first.progress = (level * 1000).toInt()
             pair.second.text = "%.2f".format(level)
         }
@@ -1598,6 +2187,16 @@ class MainActivity : AppCompatActivity() {
             detailViews = null
             detailSendViews = null
             detailEqViews = null
+            detailPanSeek = null
+            detailPanText = null
+            detailPhantomButton = null
+            detailPhaseButton = null
+            detailGateInButton = null
+            detailGateFiltersInButton = null
+            detailGateParamViews = arrayOfNulls(7)
+            detailCompFilterFreqSeek = null
+            detailCompFilterFreqText = null
+            detailCompFiltersInButton = null
         }
 
         // --- Постоянная панель mute/solo/фейдер/метр ---
@@ -1723,6 +2322,7 @@ class MainActivity : AppCompatActivity() {
                 ParamKind.COMP_RELEASE -> data.compRelease = level
                 ParamKind.COMP_THRESHOLD -> data.compThreshold = level
                 ParamKind.COMP_MAKEUP -> data.compMakeup = level
+                ParamKind.COMP_FILTER_FREQ -> data.compFilterFreq = level
                 else -> {}
             }
         }
@@ -1754,18 +2354,43 @@ class MainActivity : AppCompatActivity() {
         wire(threshold, thresholdText, ParamKind.COMP_THRESHOLD)
         wire(makeup, makeupText, ParamKind.COMP_MAKEUP)
 
+        // Фильтр компрессора - ПОДТВЕРЖДЕНО тем же захватом, что и остальной компрессор.
+        val compFilterFreq = view.findViewById<SeekBar>(R.id.seekCompFilterFreq)
+        val compFilterFreqText = view.findViewById<TextView>(R.id.textCompFilterFreqValue)
+        val compData = ConnectionHolder.channelData[channel]
+        compFilterFreq.progress = (compData.compFilterFreq * 1000).toInt()
+        compFilterFreqText.text = "%.2f".format(compData.compFilterFreq)
+        wire(compFilterFreq, compFilterFreqText, ParamKind.COMP_FILTER_FREQ)
+        detailCompFilterFreqSeek = compFilterFreq
+        detailCompFilterFreqText = compFilterFreqText
+
+        val btnCompFiltersIn = view.findViewById<Button>(R.id.btnCompFiltersIn)
+        btnCompFiltersIn.backgroundTintList = null
+        btnCompFiltersIn.text = if (compData.compFiltersInLocal) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+        btnCompFiltersIn.setBackgroundColor(Color.parseColor(if (compData.compFiltersInLocal) "#ff9f0a" else "#3a3a3c"))
+        btnCompFiltersIn.setOnClickListener {
+            val newState = !ConnectionHolder.channelData[channel].compFiltersInLocal
+            ConnectionHolder.channelData[channel].compFiltersInLocal = newState
+            btnCompFiltersIn.text = if (newState) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+            btnCompFiltersIn.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+            sendRawAsync(Pro2Commands.setCompFiltersIn(channel, newState))
+        }
+        detailCompFiltersInButton = btnCompFiltersIn
+
         // --- Вкладки INPUT / COMP / SENDS ---
         val tabInput = view.findViewById<Button>(R.id.btnTabInput)
         val tabComp = view.findViewById<Button>(R.id.btnTabComp)
         val tabSends = view.findViewById<Button>(R.id.btnTabSends)
         val tabEq = view.findViewById<Button>(R.id.btnTabEq)
+        val tabGate = view.findViewById<Button>(R.id.btnTabGate)
         val inputBlock = view.findViewById<android.widget.LinearLayout>(R.id.inputBlockContent)
         val compBlock = view.findViewById<android.widget.LinearLayout>(R.id.compBlockContent)
         val sendsBlock = view.findViewById<android.widget.LinearLayout>(R.id.sendsBlockContent)
         val eqBlock = view.findViewById<android.widget.LinearLayout>(R.id.eqBlockContent)
+        val gateBlock = view.findViewById<android.widget.LinearLayout>(R.id.gateBlockContent)
 
         fun selectTab(active: Button) {
-            for (tab in listOf(tabInput, tabComp, tabSends, tabEq)) {
+            for (tab in listOf(tabInput, tabComp, tabSends, tabEq, tabGate)) {
                 val isActive = tab === active
                 tab.backgroundTintList = android.content.res.ColorStateList.valueOf(
                     Color.parseColor(if (isActive) "#ff9f0a" else "#3a3a3c")
@@ -1778,6 +2403,7 @@ class MainActivity : AppCompatActivity() {
             compBlock.visibility = android.view.View.GONE
             sendsBlock.visibility = android.view.View.GONE
             eqBlock.visibility = android.view.View.GONE
+            gateBlock.visibility = android.view.View.GONE
         }
         fun showInput() {
             hideAllBlocks()
@@ -1799,6 +2425,11 @@ class MainActivity : AppCompatActivity() {
             eqBlock.visibility = android.view.View.VISIBLE
             selectTab(tabEq)
         }
+        fun showGate() {
+            hideAllBlocks()
+            gateBlock.visibility = android.view.View.VISIBLE
+            selectTab(tabGate)
+        }
         tabInput.setOnClickListener { showInput() }
         tabComp.setOnClickListener { showComp() }
         tabSends.setOnClickListener {
@@ -1814,7 +2445,17 @@ class MainActivity : AppCompatActivity() {
             // каналов сразу при подключении).
             subscribeEq(channel)
         }
+        tabGate.setOnClickListener {
+            showGate()
+            // Подписываемся на Gate этого канала только сейчас (9 параметров).
+            subscribeGate(channel)
+        }
         showInput()
+
+        // --- Вкладка GATE: строится программно ---
+        // ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным захватом трафика iPad.
+        gateBlock.removeAllViews()
+        buildGateBlock(gateBlock, channel)
 
         // --- Вкладка EQ: 4 полосы, строится программно ---
         // Подтверждено ОПИСАНИЯМИ в списке команд, но НЕ реальным захватом.
@@ -1829,6 +2470,101 @@ class MainActivity : AppCompatActivity() {
             detailGainValue.text = "%.2f".format(v)
             ConnectionHolder.channelData[channel].gain = v
             sendGain(channel, v)
+        }
+
+        // --- Вкладка INPUT: 48V, фаза, панорама, имя, цвет ---
+        val inputData = ConnectionHolder.channelData[channel]
+
+        val btnPhantom = view.findViewById<Button>(R.id.btnDetailPhantom)
+        btnPhantom.backgroundTintList = null
+        btnPhantom.text = if (inputData.phantomLocal) "48V ВКЛ" else "48V ВЫКЛ"
+        btnPhantom.setBackgroundColor(Color.parseColor(if (inputData.phantomLocal) "#ff9f0a" else "#3a3a3c"))
+        btnPhantom.setOnClickListener {
+            val newState = !ConnectionHolder.channelData[channel].phantomLocal
+            ConnectionHolder.channelData[channel].phantomLocal = newState
+            btnPhantom.text = if (newState) "48V ВКЛ" else "48V ВЫКЛ"
+            btnPhantom.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+            sendPhantomPower(channel, newState)
+        }
+
+        val btnPhase = view.findViewById<Button>(R.id.btnDetailPhase)
+        btnPhase.backgroundTintList = null
+        btnPhase.text = if (inputData.phaseLocal) "ФАЗА ИНВЕРТ" else "ФАЗА НОРМ"
+        btnPhase.setBackgroundColor(Color.parseColor(if (inputData.phaseLocal) "#ff9f0a" else "#3a3a3c"))
+        btnPhase.setOnClickListener {
+            val newState = !ConnectionHolder.channelData[channel].phaseLocal
+            ConnectionHolder.channelData[channel].phaseLocal = newState
+            btnPhase.text = if (newState) "ФАЗА ИНВЕРТ" else "ФАЗА НОРМ"
+            btnPhase.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+            sendPhase(channel, newState)
+        }
+
+        val seekPan = view.findViewById<SeekBar>(R.id.seekDetailPan)
+        val textPan = view.findViewById<TextView>(R.id.textDetailPanValue)
+        detailPanSeek = seekPan
+        detailPanText = textPan
+        detailPhantomButton = btnPhantom
+        detailPhaseButton = btnPhase
+        fun panLabel(v: Float): String = when {
+            v < 0.48f -> "Л %.0f".format((0.5f - v) * 200)
+            v > 0.52f -> "П %.0f".format((v - 0.5f) * 200)
+            else -> "ЦЕНТР"
+        }
+        seekPan.progress = (inputData.pan * 1000).toInt()
+        textPan.text = panLabel(inputData.pan)
+        seekPan.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            var lastSend = 0L
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                val v = progress / 1000f
+                textPan.text = panLabel(v)
+                if (!fromUser) return
+                ConnectionHolder.channelData[channel].pan = v
+                val now = System.currentTimeMillis()
+                if (now - lastSend >= minSendIntervalMs) {
+                    lastSend = now
+                    sendPan(channel, v)
+                }
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                val v = (sb?.progress ?: 0) / 1000f
+                ConnectionHolder.channelData[channel].pan = v
+                sendPan(channel, v)
+            }
+        })
+
+        val editName = view.findViewById<EditText>(R.id.editDetailChannelName)
+        editName.setText(inputData.name)
+        view.findViewById<Button>(R.id.btnDetailApplyName).setOnClickListener {
+            val newName = editName.text.toString().trim()
+            if (newName.isNotBlank()) {
+                ConnectionHolder.channelData[channel].name = newName
+                sendChannelName(channel, newName)
+            }
+        }
+
+        // Небольшая палитра готовых цветов - переиспользуем стандартную
+        // палитру пульта, уже подтверждённую реальным захватом (setColour).
+        val swatchRow = view.findViewById<android.widget.LinearLayout>(R.id.rowColourSwatches)
+        swatchRow.removeAllViews()
+        val presetColours = listOf(
+            Color.parseColor("#FF0000FF"), Color.parseColor("#FFFFC800"),
+            Color.parseColor("#FFFF0000"), Color.parseColor("#FF00C8FF"),
+            Color.parseColor("#FF00FF00"), Color.parseColor("#FFFF00FF"),
+            Color.parseColor("#FFFFFFFF"), Color.parseColor("#FF808080")
+        )
+        for (argb in presetColours) {
+            val swatch = android.view.View(this)
+            val params = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+            params.marginEnd = 6
+            swatch.layoutParams = params
+            swatch.setBackgroundColor(argb)
+            swatch.setOnClickListener {
+                ConnectionHolder.channelData[channel].colourArgb = argb
+                updateColourUi(channel, argb)
+                sendChannelColour(channel, argb)
+            }
+            swatchRow.addView(swatch)
         }
 
         // --- Вкладка SENDS: 16 посылов, строится программно ---
@@ -2010,6 +2746,183 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Строит содержимое вкладки GATE: переключатель IN/OUT, 7 непрерывных
+     * параметров и переключатель фильтров. ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным
+     * захватом трафика iPad.
+     */
+    private fun buildGateBlock(container: android.widget.LinearLayout, channel: Int) {
+        val data = ConnectionHolder.channelData[channel]
+
+        val gateInButton = Button(this).apply {
+            text = if (data.gateInLocal) "GATE ВКЛ" else "GATE ВЫКЛ"
+            setTextColor(Color.parseColor("#ffffff"))
+            setBackgroundColor(Color.parseColor(if (data.gateInLocal) "#ff9f0a" else "#3a3a3c"))
+            setOnClickListener {
+                val newState = !ConnectionHolder.channelData[channel].gateInLocal
+                ConnectionHolder.channelData[channel].gateInLocal = newState
+                text = if (newState) "GATE ВКЛ" else "GATE ВЫКЛ"
+                setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+                sendGateIn(channel, newState)
+            }
+        }
+        container.addView(gateInButton, android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = 24 })
+        detailGateInButton = gateInButton
+
+        fun makeRow(label: String, initial: Float, kind: ParamKind) {
+            val rowLabel = TextView(this).apply {
+                text = label
+                setTextColor(Color.parseColor("#ff9f0a"))
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                textSize = 12f
+            }
+            val seek = SeekBar(this).apply { max = 1000; progress = (initial * 1000).toInt() }
+            val valueText = TextView(this).apply {
+                text = "%.2f".format(initial)
+                setTextColor(Color.parseColor("#aaaaaa"))
+                textSize = 11f
+            }
+            var lastSend = 0L
+            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                    val level = progress / 1000f
+                    valueText.text = "%.2f".format(level)
+                    if (!fromUser) return
+                    persistGate(channel, kind, level)
+                    val now = System.currentTimeMillis()
+                    if (now - lastSend >= minSendIntervalMs) {
+                        lastSend = now
+                        sendGateParam(channel, kind, level)
+                    }
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {
+                    val level = (sb?.progress ?: 0) / 1000f
+                    persistGate(channel, kind, level)
+                    sendGateParam(channel, kind, level)
+                }
+            })
+            val margin = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 16 }
+            container.addView(rowLabel)
+            container.addView(seek)
+            container.addView(valueText, margin)
+            val idx = when (kind) {
+                ParamKind.GATE_THRESHOLD -> 0
+                ParamKind.GATE_RANGE -> 1
+                ParamKind.GATE_ATTACK -> 2
+                ParamKind.GATE_HOLD -> 3
+                ParamKind.GATE_RELEASE -> 4
+                ParamKind.GATE_TRANSIENT -> 5
+                ParamKind.GATE_FILTER_FREQ -> 6
+                else -> -1
+            }
+            if (idx >= 0) detailGateParamViews[idx] = seek to valueText
+        }
+
+        makeRow("THRESHOLD", data.gateThreshold, ParamKind.GATE_THRESHOLD)
+        makeRow("RANGE", data.gateRange, ParamKind.GATE_RANGE)
+        makeRow("ATTACK", data.gateAttack, ParamKind.GATE_ATTACK)
+        makeRow("HOLD", data.gateHold, ParamKind.GATE_HOLD)
+        makeRow("RELEASE", data.gateRelease, ParamKind.GATE_RELEASE)
+        makeRow("TRANSIENT", data.gateTransient, ParamKind.GATE_TRANSIENT)
+        makeRow("FILTER FREQ", data.gateFilterFreq, ParamKind.GATE_FILTER_FREQ)
+
+        val filtersInButton = Button(this).apply {
+            text = if (data.gateFiltersInLocal) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+            setTextColor(Color.parseColor("#ffffff"))
+            setBackgroundColor(Color.parseColor(if (data.gateFiltersInLocal) "#ff9f0a" else "#3a3a3c"))
+            setOnClickListener {
+                val newState = !ConnectionHolder.channelData[channel].gateFiltersInLocal
+                ConnectionHolder.channelData[channel].gateFiltersInLocal = newState
+                text = if (newState) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+                setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+                sendGateFiltersIn(channel, newState)
+            }
+        }
+        container.addView(filtersInButton)
+        detailGateFiltersInButton = filtersInButton
+    }
+
+    private fun persistGate(channel: Int, kind: ParamKind, level: Float) {
+        val data = ConnectionHolder.channelData[channel]
+        when (kind) {
+            ParamKind.GATE_THRESHOLD -> data.gateThreshold = level
+            ParamKind.GATE_RANGE -> data.gateRange = level
+            ParamKind.GATE_ATTACK -> data.gateAttack = level
+            ParamKind.GATE_HOLD -> data.gateHold = level
+            ParamKind.GATE_RELEASE -> data.gateRelease = level
+            ParamKind.GATE_TRANSIENT -> data.gateTransient = level
+            ParamKind.GATE_FILTER_FREQ -> data.gateFilterFreq = level
+            else -> {}
+        }
+    }
+
+    private fun panLabelFor(v: Float): String = when {
+        v < 0.48f -> "Л %.0f".format((0.5f - v) * 200)
+        v > 0.52f -> "П %.0f".format((v - 0.5f) * 200)
+        else -> "ЦЕНТР"
+    }
+
+    private fun updatePanUi(channel: Int, level: Float) {
+        ConnectionHolder.channelData[channel].pan = level
+        if (openDetailChannel != channel) return
+        detailPanSeek?.progress = (level * 1000).toInt()
+        detailPanText?.text = panLabelFor(level)
+    }
+
+    private fun updatePhantomUi(channel: Int, on: Boolean) {
+        ConnectionHolder.channelData[channel].phantomLocal = on
+        if (openDetailChannel != channel) return
+        detailPhantomButton?.text = if (on) "48V ВКЛ" else "48V ВЫКЛ"
+        detailPhantomButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+    }
+
+    private fun updatePhaseUi(channel: Int, on: Boolean) {
+        ConnectionHolder.channelData[channel].phaseLocal = on
+        if (openDetailChannel != channel) return
+        detailPhaseButton?.text = if (on) "ФАЗА ИНВЕРТ" else "ФАЗА НОРМ"
+        detailPhaseButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+    }
+
+    private fun updateGateInUi(channel: Int, on: Boolean) {
+        ConnectionHolder.channelData[channel].gateInLocal = on
+        if (openDetailChannel != channel) return
+        detailGateInButton?.text = if (on) "GATE ВКЛ" else "GATE ВЫКЛ"
+        detailGateInButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+    }
+
+    private fun updateGateFiltersInUi(channel: Int, on: Boolean) {
+        ConnectionHolder.channelData[channel].gateFiltersInLocal = on
+        if (openDetailChannel != channel) return
+        detailGateFiltersInButton?.text = if (on) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+        detailGateFiltersInButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+    }
+
+    private fun updateGateParamUi(channel: Int, kind: ParamKind, level: Float) {
+        persistGate(channel, kind, level)
+        if (openDetailChannel != channel) return
+        val idx = when (kind) {
+            ParamKind.GATE_THRESHOLD -> 0
+            ParamKind.GATE_RANGE -> 1
+            ParamKind.GATE_ATTACK -> 2
+            ParamKind.GATE_HOLD -> 3
+            ParamKind.GATE_RELEASE -> 4
+            ParamKind.GATE_TRANSIENT -> 5
+            ParamKind.GATE_FILTER_FREQ -> 6
+            else -> return
+        }
+        val pair = detailGateParamViews.getOrNull(idx) ?: return
+        pair.first.progress = (level * 1000).toInt()
+        pair.second.text = "%.2f".format(level)
+    }
+
+
     private fun updateFaderUi(channel: Int, level: Float) {
         val ui = channels.getOrNull(channel)
         // Пока пользователь реально держит палец на фейдере - не даём
@@ -2079,9 +2992,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateNameUi(channel: Int, name: String) {
-        if (name.isNotBlank()) ConnectionHolder.channelData[channel].name = name
-        val ui = channels.getOrNull(channel) ?: return
-        if (name.isNotBlank()) ui.labelView.text = name
+        if (name.isBlank()) return
+        ConnectionHolder.channelData[channel].name = name
+        channels.getOrNull(channel)?.labelView?.text = name
+        // Мониторный режим не строит инженерский список channels - у него
+        // свой собственный набор полос, обновляем отдельно.
+        if (appMode == MODE_MONITOR) {
+            monitorChannelLabels.getOrNull(channel)?.text = name
+        }
     }
 
     private fun sendFader(channelIndex: Int, level: Float) {
@@ -2090,6 +3008,48 @@ class MainActivity : AppCompatActivity() {
 
     private fun sendGain(channelIndex: Int, level: Float) {
         sendRawAsync(Pro2Commands.setGain(channelIndex, level))
+    }
+
+    private fun sendPan(channelIndex: Int, level: Float) {
+        sendRawAsync(Pro2Commands.setPan(channelIndex, level))
+    }
+
+    private fun sendPhantomPower(channelIndex: Int, on: Boolean) {
+        sendRawAsync(Pro2Commands.setPhantomPower(channelIndex, on))
+    }
+
+    private fun sendPhase(channelIndex: Int, inverted: Boolean) {
+        sendRawAsync(Pro2Commands.setPhase(channelIndex, inverted))
+    }
+
+    private fun sendChannelName(channelIndex: Int, name: String) {
+        sendRawAsync(Pro2Commands.setName(channelIndex, name))
+    }
+
+    private fun sendChannelColour(channelIndex: Int, argb: Int) {
+        sendRawAsync(Pro2Commands.setColour(channelIndex, argb))
+    }
+
+    private fun sendGateIn(channelIndex: Int, on: Boolean) {
+        sendRawAsync(Pro2Commands.setGateIn(channelIndex, on))
+    }
+
+    private fun sendGateFiltersIn(channelIndex: Int, on: Boolean) {
+        sendRawAsync(Pro2Commands.setGateFiltersIn(channelIndex, on))
+    }
+
+    private fun sendGateParam(channelIndex: Int, kind: ParamKind, level: Float) {
+        val packet = when (kind) {
+            ParamKind.GATE_THRESHOLD -> Pro2Commands.setGateThreshold(channelIndex, level)
+            ParamKind.GATE_RANGE -> Pro2Commands.setGateRange(channelIndex, level)
+            ParamKind.GATE_ATTACK -> Pro2Commands.setGateAttack(channelIndex, level)
+            ParamKind.GATE_HOLD -> Pro2Commands.setGateHold(channelIndex, level)
+            ParamKind.GATE_RELEASE -> Pro2Commands.setGateRelease(channelIndex, level)
+            ParamKind.GATE_TRANSIENT -> Pro2Commands.setGateTransient(channelIndex, level)
+            ParamKind.GATE_FILTER_FREQ -> Pro2Commands.setGateFilterFreq(channelIndex, level)
+            else -> return
+        }
+        sendRawAsync(packet)
     }
 
     private fun sendMute(channelIndex: Int, muted: Boolean) {
@@ -2240,6 +3200,48 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun sendVcaFader(vcaIndex: Int, level: Float) {
+        val packet = Pro2Commands.setVcaFader(vcaIndex, level)
+        val address = consoleAddress ?: return
+        val sock = socket ?: return
+        val port = consolePort
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                sendRaw(sock, address, port, packet)
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { textStatus.text = "Ошибка VCA fader: ${e.message}" }
+            }
+        }
+    }
+
+    private fun sendVcaMute(vcaIndex: Int, muted: Boolean) {
+        val packet = Pro2Commands.setVcaMute(vcaIndex, muted)
+        val address = consoleAddress ?: return
+        val sock = socket ?: return
+        val port = consolePort
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                sendRaw(sock, address, port, packet)
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { textStatus.text = "Ошибка VCA mute: ${e.message}" }
+            }
+        }
+    }
+
+    private fun sendVcaSolo(vcaIndex: Int, soloed: Boolean) {
+        val packet = Pro2Commands.setVcaSolo(vcaIndex, soloed)
+        val address = consoleAddress ?: return
+        val sock = socket ?: return
+        val port = consolePort
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                sendRaw(sock, address, port, packet)
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { textStatus.text = "Ошибка VCA solo: ${e.message}" }
+            }
+        }
+    }
+
     private fun sendSubSend(channelIndex: Int, auxBus: Int, level: Float) {
         val packet = Pro2Commands.setSubSendLevel(channelIndex, auxBus, level)
         val address = consoleAddress ?: return
@@ -2325,6 +3327,7 @@ class MainActivity : AppCompatActivity() {
             ParamKind.COMP_RELEASE -> Pro2Commands.setCompRelease(channelIndex, level)
             ParamKind.COMP_THRESHOLD -> Pro2Commands.setCompThreshold(channelIndex, level)
             ParamKind.COMP_MAKEUP -> Pro2Commands.setCompMakeupGain(channelIndex, level)
+            ParamKind.COMP_FILTER_FREQ -> Pro2Commands.setCompFilterFreq(channelIndex, level)
             else -> return
         }
         CoroutineScope(Dispatchers.IO).launch {
@@ -2372,13 +3375,29 @@ class MainActivity : AppCompatActivity() {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        if (channelDetailContainer.visibility == android.view.View.VISIBLE) {
+        if (appMode == MODE_ENGINEER && channelDetailContainer.visibility == android.view.View.VISIBLE) {
             channelDetailContainer.visibility = android.view.View.GONE
             channelDetailContainer.removeAllViews()
             openDetailChannel = null
             detailViews = null
             detailSendViews = null
             detailEqViews = null
+            detailPanSeek = null
+            detailPanText = null
+            detailPhantomButton = null
+            detailPhaseButton = null
+            detailGateInButton = null
+            detailGateFiltersInButton = null
+            detailGateParamViews = arrayOfNulls(7)
+            detailCompFilterFreqSeek = null
+            detailCompFilterFreqText = null
+            detailCompFiltersInButton = null
+            return
+        }
+        if (appMode == MODE_MONITOR && monitorSelectedBus >= 0) {
+            monitorSelectedBus = -1
+            ConnectionHolder.uiMonitorSelectedBus = -1
+            onCreateMonitor()
             return
         }
         super.onBackPressed()

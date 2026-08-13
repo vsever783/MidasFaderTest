@@ -2,6 +2,7 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
     android:orientation="vertical"
     android:background="#000000">
 
@@ -39,11 +40,16 @@
         просто добавляем сюда ещё такие же кнопки-вкладки, когда появится,
         что в них показывать.
     -->
-    <LinearLayout
+    <HorizontalScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:scrollbars="none"
+        android:background="#1c1c1e">
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:background="#1c1c1e"
         android:padding="8dp">
 
         <Button
@@ -83,8 +89,19 @@
             android:text="EQ"
             android:textColor="#ffffff"
             android:textStyle="bold"
+            android:backgroundTint="#3a3a3c"
+            android:layout_marginEnd="8dp" />
+
+        <Button
+            android:id="@+id/btnTabGate"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="GATE"
+            android:textColor="#ffffff"
+            android:textStyle="bold"
             android:backgroundTint="#3a3a3c" />
     </LinearLayout>
+    </HorizontalScrollView>
 
     <!-- Основная область: контент слева, mute/solo/фейдер/метр справа -->
     <LinearLayout
@@ -125,7 +142,7 @@
                     android:textSize="14sp"
                     android:layout_marginBottom="12dp" />
 
-                <com.example.midasfader.RotaryKnobView
+                <com.example.midasfadercontrol.RotaryKnobView
                     android:id="@+id/knobDetailGain"
                     android:layout_width="120dp"
                     android:layout_height="120dp" />
@@ -138,6 +155,103 @@
                     android:textColor="#8e8e93"
                     android:textSize="14sp"
                     android:layout_marginTop="12dp" />
+
+                <!-- 48V и переворот фазы - ПОДТВЕРЖДЕНО реальным захватом
+                     (48V) / списком команд (фаза). -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="20dp">
+
+                    <Button
+                        android:id="@+id/btnDetailPhantom"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="8dp"
+                        android:text="48V ВЫКЛ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#ffffff"
+                        android:backgroundTint="#3a3a3c" />
+
+                    <Button
+                        android:id="@+id/btnDetailPhase"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="ФАЗА НОРМ"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#ffffff"
+                        android:backgroundTint="#3a3a3c" />
+                </LinearLayout>
+
+                <!-- Панорама - ПОДТВЕРЖДЕНО реальным захватом. -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="PAN"
+                    android:textColor="#ff9f0a"
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:layout_marginTop="24dp" />
+                <SeekBar
+                    android:id="@+id/seekDetailPan"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="1000"
+                    android:progress="500" />
+                <TextView
+                    android:id="@+id/textDetailPanValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ЦЕНТР"
+                    android:textColor="#8e8e93"
+                    android:textSize="12sp" />
+
+                <!-- Переименование/перекраска канала прямо из приложения. -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="24dp">
+
+                    <EditText
+                        android:id="@+id/editDetailChannelName"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:hint="Имя канала"
+                        android:textColor="#ffffff"
+                        android:textColorHint="#888888"
+                        android:maxLines="1" />
+
+                    <Button
+                        android:id="@+id/btnDetailApplyName"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:text="OK"
+                        android:backgroundTint="#ff9f0a"
+                        android:textColor="#000000" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ЦВЕТ КАНАЛА"
+                    android:textColor="#8e8e93"
+                    android:textSize="11sp"
+                    android:layout_marginTop="16dp"
+                    android:layout_marginBottom="8dp" />
+
+                <LinearLayout
+                    android:id="@+id/rowColourSwatches"
+                    android:layout_width="match_parent"
+                    android:layout_height="36dp"
+                    android:orientation="horizontal" />
 
             </LinearLayout>
 
@@ -275,6 +389,41 @@
                     android:textColor="#aaaaaa"
                     android:textSize="12sp" />
 
+                <!-- Фильтр компрессора - ПОДТВЕРЖДЕНО тем же захватом, что
+                     и остальной компрессор. -->
+                <Button
+                    android:id="@+id/btnCompFiltersIn"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="ФИЛЬТР ВЫКЛ"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#ffffff"
+                    android:backgroundTint="#3a3a3c"
+                    android:layout_marginTop="20dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="ЧАСТОТА ФИЛЬТРА"
+                    android:textColor="#ff9f0a"
+                    android:textStyle="bold"
+                    android:textSize="12sp"
+                    android:layout_marginTop="12dp" />
+                <SeekBar
+                    android:id="@+id/seekCompFilterFreq"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="1000"
+                    android:progress="0" />
+                <TextView
+                    android:id="@+id/textCompFilterFreqValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0,00"
+                    android:textColor="#aaaaaa"
+                    android:textSize="12sp" />
+
             </LinearLayout>
 
             <LinearLayout
@@ -294,6 +443,15 @@
                 android:padding="20dp"
                 android:visibility="gone" />
             <!-- Заполняется программно (4 полосы EQ) в openChannelDetail() -->
+
+            <LinearLayout
+                android:id="@+id/gateBlockContent"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp"
+                android:visibility="gone" />
+            <!-- Заполняется программно (Gate) в openChannelDetail() -->
 
           </LinearLayout>
         </ScrollView>
