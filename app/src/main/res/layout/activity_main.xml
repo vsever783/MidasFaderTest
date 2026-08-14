@@ -44,7 +44,7 @@
             android:id="@+id/textConnectionStatus"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="● Не подключено"
+            android:text="● Not connected"
             android:textColor="#8e8e93"
             android:textSize="12sp"
             android:layout_weight="1" />
@@ -69,7 +69,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Порт"
+            android:text="Port"
             android:textColor="#8e8e93"
             android:textSize="12sp"
             android:layout_marginStart="12dp"
@@ -89,7 +89,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="12dp"
-            android:text="Подключить"
+            android:text="Connect"
             android:backgroundTint="#ff9f0a"
             android:textColor="#000000" />
     </LinearLayout>
@@ -105,7 +105,7 @@
         android:paddingEnd="12dp"
         android:paddingTop="@dimen/status_text_v_padding"
         android:paddingBottom="@dimen/status_text_v_padding"
-        android:text="Не подключено"
+        android:text="Not connected"
         android:textColor="#8e8e93"
         android:textSize="11sp" />
 

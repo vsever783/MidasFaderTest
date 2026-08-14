@@ -19,7 +19,7 @@
             android:id="@+id/btnDetailBack"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="← Назад"
+            android:text="← Back"
             android:textColor="#ffffff"
             android:backgroundTint="#3a3a3c" />
 
@@ -170,7 +170,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:layout_marginEnd="8dp"
-                        android:text="48V ВЫКЛ"
+                        android:text="48V OFF"
                         android:textSize="12sp"
                         android:textStyle="bold"
                         android:textColor="#ffffff"
@@ -181,7 +181,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="ФАЗА НОРМ"
+                        android:text="PHASE NORM"
                         android:textSize="12sp"
                         android:textStyle="bold"
                         android:textColor="#ffffff"
@@ -207,7 +207,7 @@
                     android:id="@+id/textDetailPanValue"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="ЦЕНТР"
+                    android:text="CENTER"
                     android:textColor="#8e8e93"
                     android:textSize="12sp" />
 
@@ -223,7 +223,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:hint="Имя канала"
+                        android:hint="Channel name"
                         android:textColor="#ffffff"
                         android:textColorHint="#888888"
                         android:maxLines="1" />
@@ -241,7 +241,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="ЦВЕТ КАНАЛА"
+                    android:text="CHANNEL COLOUR"
                     android:textColor="#8e8e93"
                     android:textSize="11sp"
                     android:layout_marginTop="16dp"

@@ -19,7 +19,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Выберите режим"
+        android:text="Select mode"
         android:textColor="#8e8e93"
         android:textSize="14sp"
         android:layout_marginBottom="48dp" />
@@ -28,7 +28,7 @@
         android:id="@+id/btnRoleEngineer"
         android:layout_width="match_parent"
         android:layout_height="72dp"
-        android:text="ЗВУКОРЕЖИССЁР"
+        android:text="ENGINEER"
         android:textSize="16sp"
         android:textStyle="bold"
         android:textColor="#ffffff"
@@ -38,7 +38,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Полное управление пультом: все каналы, мастер, aux, VCA"
+        android:text="Full console control: all channels, master, aux, VCA"
         android:textColor="#8e8e93"
         android:textSize="12sp"
         android:gravity="center"
@@ -48,7 +48,7 @@
         android:id="@+id/btnRoleMonitor"
         android:layout_width="match_parent"
         android:layout_height="72dp"
-        android:text="МУЗЫКАНТ (МОНИТОР)"
+        android:text="MUSICIAN (MONITOR)"
         android:textSize="16sp"
         android:textStyle="bold"
         android:textColor="#ffffff"
@@ -57,7 +57,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Своя мониторная шина: посылы каналов и громкость шины"
+        android:text="Your monitor bus: channel sends and bus volume"
         android:textColor="#8e8e93"
         android:textSize="12sp"
         android:gravity="center" />

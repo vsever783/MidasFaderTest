@@ -19,7 +19,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:minHeight="0dp"
-            android:text="← Назад"
+            android:text="← Back"
             android:textColor="#ffffff"
             android:backgroundTint="#3a3a3c" />
 
@@ -51,7 +51,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Громкость моей шины"
+            android:text="My bus level"
             android:textColor="#8e8e93"
             android:textSize="12sp" />
 

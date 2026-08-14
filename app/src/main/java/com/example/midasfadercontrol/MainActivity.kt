@@ -332,9 +332,9 @@ class MainActivity : AppCompatActivity() {
         if (existingSocket != null && existingAddress != null) {
             receiveJob?.cancel()
             pollJob?.cancel()
-            textConnectionStatus.text = "● Подключено"
+            textConnectionStatus.text = "● Connected"
             textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
-            textStatus.text = "Подключение восстановлено после поворота экрана"
+            textStatus.text = "Connection restored after screen rotation"
             restoreUiFromChannelData()
             startReceiveLoop(existingSocket)
             startPollLoop(existingSocket, existingAddress, consolePort)
@@ -382,7 +382,7 @@ class MainActivity : AppCompatActivity() {
         // Восстановление после поворота экрана - если уже подключены,
         // сразу показываем список шин (или экран выбранной шины).
         if (socket != null) {
-            textConnectionStatus.text = "● Подключено"
+            textConnectionStatus.text = "● Connected"
             textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
             buildMonitorBusList()
             if (ConnectionHolder.uiMonitorSelectedBus >= 0) {
@@ -1043,9 +1043,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Порядок как попросили: каналы, aux returns, aux-шины, VCA, мастер - в конце.
-        val btnChannels = makeTab("КАНАЛЫ", StripMode.CHANNELS)
+        val btnChannels = makeTab("CHANNELS", StripMode.CHANNELS)
         val btnAux = makeTab("AUX RETURNS", StripMode.AUX_RETURNS)
-        val btnAuxBus = makeTab("AUX ШИНЫ", StripMode.AUX_BUS)
+        val btnAuxBus = makeTab("AUX BUSES", StripMode.AUX_BUS)
         val btnVca = makeTab("VCA", StripMode.VCA)
         val btnMaster = makeTab("MASTER", StripMode.MASTER)
         modeButtons = mapOf(
@@ -1089,7 +1089,7 @@ class MainActivity : AppCompatActivity() {
         val host = editHost.text.toString().trim()
         val port = editPort.text.toString().trim().toIntOrNull()
         if (host.isEmpty() || port == null) {
-            textStatus.text = "Проверьте IP и порт"
+            textStatus.text = "Check IP and port"
             return
         }
 
@@ -1119,9 +1119,9 @@ class MainActivity : AppCompatActivity() {
                     socket = newSocket
                     consoleAddress = address
                     consolePort = port
-                    textConnectionStatus.text = "● Подключено"
+                    textConnectionStatus.text = "● Connected"
                     textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
-                    textStatus.text = "Подключено к $host:$port, подписываюсь на живые обновления..."
+                    textStatus.text = "Connected to $host:$port, subscribing to live updates..."
                 }
 
                 startReceiveLoop(newSocket)
@@ -1142,9 +1142,9 @@ class MainActivity : AppCompatActivity() {
                 startPollLoop(newSocket, address, port)
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    textConnectionStatus.text = "● Ошибка подключения"
+                    textConnectionStatus.text = "● Connection error"
                     textConnectionStatus.setTextColor(Color.parseColor("#ff3b30"))
-                    textStatus.text = "Ошибка подключения: ${e.message}"
+                    textStatus.text = "Connection error: ${e.message}"
                 }
             }
         }
@@ -1206,7 +1206,7 @@ class MainActivity : AppCompatActivity() {
                     // норма - просто нет данных за секунду, продолжаем ждать
                 } catch (e: Exception) {
                     if (!isActive) break
-                    withContext(Dispatchers.Main) { textStatus.text = "Ошибка приёма: ${e.message}" }
+                    withContext(Dispatchers.Main) { textStatus.text = "Receive error: ${e.message}" }
                 }
             }
         }
@@ -1445,7 +1445,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             withContext(Dispatchers.Main) {
-                textStatus.text = "Подписался на живые обновления всех каналов"
+                textStatus.text = "Subscribed to live updates for all channels"
             }
         }
     }
@@ -1643,7 +1643,7 @@ class MainActivity : AppCompatActivity() {
                 ConnectionHolder.channelData[sub.channel].compFiltersInLocal = on
                 if (openDetailChannel == sub.channel) {
                     val btn = detailCompDynViews?.filtersInButton
-                    btn?.text = if (on) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+                    btn?.text = if (on) "FILTER ON" else "FILTER OFF"
                     btn?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
                 }
             }
@@ -2068,7 +2068,7 @@ class MainActivity : AppCompatActivity() {
         ConnectionHolder.channelData[channel].eqInLocal = on
         if (openDetailChannel == channel) {
             val btn = detailEqViews?.inButton ?: return
-            btn.text = if (on) "EQ ВКЛ" else "EQ ВЫКЛ"
+            btn.text = if (on) "EQ ON" else "EQ OFF"
             btn.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
         }
     }
@@ -2078,7 +2078,7 @@ class MainActivity : AppCompatActivity() {
         ConnectionHolder.channelData[channel].eqBandActiveLocal[bandIndex] = on
         if (openDetailChannel == channel) {
             val btn = detailEqViews?.bands?.getOrNull(bandIndex)?.activeButton ?: return
-            btn.text = if (on) "ВКЛ" else "ВЫКЛ"
+            btn.text = if (on) "ON" else "OFF"
             btn.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
         }
     }
@@ -2362,24 +2362,24 @@ class MainActivity : AppCompatActivity() {
 
         val btnPhantom = view.findViewById<Button>(R.id.btnDetailPhantom)
         btnPhantom.backgroundTintList = null
-        btnPhantom.text = if (inputData.phantomLocal) "48V ВКЛ" else "48V ВЫКЛ"
+        btnPhantom.text = if (inputData.phantomLocal) "48V ON" else "48V OFF"
         btnPhantom.setBackgroundColor(Color.parseColor(if (inputData.phantomLocal) "#ff9f0a" else "#3a3a3c"))
         btnPhantom.setOnClickListener {
             val newState = !ConnectionHolder.channelData[channel].phantomLocal
             ConnectionHolder.channelData[channel].phantomLocal = newState
-            btnPhantom.text = if (newState) "48V ВКЛ" else "48V ВЫКЛ"
+            btnPhantom.text = if (newState) "48V ON" else "48V OFF"
             btnPhantom.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
             sendPhantomPower(channel, newState)
         }
 
         val btnPhase = view.findViewById<Button>(R.id.btnDetailPhase)
         btnPhase.backgroundTintList = null
-        btnPhase.text = if (inputData.phaseLocal) "ФАЗА ИНВЕРТ" else "ФАЗА НОРМ"
+        btnPhase.text = if (inputData.phaseLocal) "PHASE INV" else "PHASE NORM"
         btnPhase.setBackgroundColor(Color.parseColor(if (inputData.phaseLocal) "#ff9f0a" else "#3a3a3c"))
         btnPhase.setOnClickListener {
             val newState = !ConnectionHolder.channelData[channel].phaseLocal
             ConnectionHolder.channelData[channel].phaseLocal = newState
-            btnPhase.text = if (newState) "ФАЗА ИНВЕРТ" else "ФАЗА НОРМ"
+            btnPhase.text = if (newState) "PHASE INV" else "PHASE NORM"
             btnPhase.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
             sendPhase(channel, newState)
         }
@@ -2391,9 +2391,9 @@ class MainActivity : AppCompatActivity() {
         detailPhantomButton = btnPhantom
         detailPhaseButton = btnPhase
         fun panLabel(v: Float): String = when {
-            v < 0.48f -> "Л %.0f".format((0.5f - v) * 200)
-            v > 0.52f -> "П %.0f".format((v - 0.5f) * 200)
-            else -> "ЦЕНТР"
+            v < 0.48f -> "L %.0f".format((0.5f - v) * 200)
+            v > 0.52f -> "R %.0f".format((v - 0.5f) * 200)
+            else -> "CENTER"
         }
         seekPan.progress = (inputData.pan * 1000).toInt()
         textPan.text = panLabel(inputData.pan)
@@ -2521,13 +2521,13 @@ class MainActivity : AppCompatActivity() {
         val bandKinds = arrayOf(Pro2Commands.EqBand.BASS, Pro2Commands.EqBand.LOW_MID, Pro2Commands.EqBand.MID_HIGH, Pro2Commands.EqBand.TREBLE)
 
         val eqInButton = Button(this).apply {
-            text = if (data.eqInLocal) "EQ ВКЛ" else "EQ ВЫКЛ"
+            text = if (data.eqInLocal) "EQ ON" else "EQ OFF"
             setTextColor(Color.parseColor("#ffffff"))
             setBackgroundColor(Color.parseColor(if (data.eqInLocal) "#ff9f0a" else "#3a3a3c"))
             setOnClickListener {
                 val newState = !ConnectionHolder.channelData[channel].eqInLocal
                 ConnectionHolder.channelData[channel].eqInLocal = newState
-                text = if (newState) "EQ ВКЛ" else "EQ ВЫКЛ"
+                text = if (newState) "EQ ON" else "EQ OFF"
                 setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
                 sendEqIn(channel)
             }
@@ -2554,7 +2554,7 @@ class MainActivity : AppCompatActivity() {
                 )
             }
             val activeButton = Button(this).apply {
-                text = if (data.eqBandActiveLocal[bandIndex]) "ВКЛ" else "ВЫКЛ"
+                text = if (data.eqBandActiveLocal[bandIndex]) "ON" else "OFF"
                 textSize = 10f
                 minHeight = 0
                 minimumHeight = 0
@@ -2564,7 +2564,7 @@ class MainActivity : AppCompatActivity() {
                 setOnClickListener {
                     val newState = !ConnectionHolder.channelData[channel].eqBandActiveLocal[bandIndex]
                     ConnectionHolder.channelData[channel].eqBandActiveLocal[bandIndex] = newState
-                    text = if (newState) "ВКЛ" else "ВЫКЛ"
+                    text = if (newState) "ON" else "OFF"
                     setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
                     sendEqBandActive(channel, band)
                 }
@@ -2611,9 +2611,9 @@ class MainActivity : AppCompatActivity() {
                 return seek to valueText
             }
 
-            val (freqSeek, freqText) = makeRow("ЧАСТОТА", data.eqFreq[bandIndex], ParamKind.EQ_FREQ)
-            val (gainSeek, gainText) = makeRow("ГЕЙН", data.eqGain[bandIndex], ParamKind.EQ_GAIN)
-            val (widthSeek, widthText) = makeRow("ШИРИНА", data.eqWidth[bandIndex], ParamKind.EQ_WIDTH)
+            val (freqSeek, freqText) = makeRow("FREQ", data.eqFreq[bandIndex], ParamKind.EQ_FREQ)
+            val (gainSeek, gainText) = makeRow("GAIN", data.eqGain[bandIndex], ParamKind.EQ_GAIN)
+            val (widthSeek, widthText) = makeRow("WIDTH", data.eqWidth[bandIndex], ParamKind.EQ_WIDTH)
 
             EqBandViews(activeButton, freqSeek, freqText, gainSeek, gainText, widthSeek, widthText)
         }
@@ -2758,12 +2758,12 @@ class MainActivity : AppCompatActivity() {
                 ).apply { topMargin = 6; bottomMargin = 6 }
             }
             val valueText = TextView(this).apply {
-                text = "%.2f".format(initial)
+                text = formatKnobValue(kind, initial)
                 setTextColor(accent)
                 textSize = 12f
             }
             knob.onValueChanged = { v ->
-                valueText.text = "%.2f".format(v)
+                valueText.text = formatKnobValue(kind, v)
                 persistDynamicsParam(channel, kind, v)
                 if (kind == thresholdKind) graph.threshold = v
                 if (kind == ratioOrRangeKind) graph.ratioOrRange = v
@@ -2780,7 +2780,7 @@ class MainActivity : AppCompatActivity() {
         val filtersInLocal = if (isGate) data.gateFiltersInLocal else data.compFiltersInLocal
         val filtersInButton = Button(this).apply {
             backgroundTintList = null
-            text = if (filtersInLocal) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+            text = if (filtersInLocal) "FILTER ON" else "FILTER OFF"
             setTextColor(Color.parseColor("#ffffff"))
             setBackgroundColor(Color.parseColor(if (filtersInLocal) accentHex else "#3a3a3c"))
             setOnClickListener {
@@ -2788,13 +2788,13 @@ class MainActivity : AppCompatActivity() {
                 if (isGate) {
                     val newState = !d.gateFiltersInLocal
                     d.gateFiltersInLocal = newState
-                    text = if (newState) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+                    text = if (newState) "FILTER ON" else "FILTER OFF"
                     setBackgroundColor(Color.parseColor(if (newState) accentHex else "#3a3a3c"))
                     sendGateFiltersIn(channel, newState)
                 } else {
                     val newState = !d.compFiltersInLocal
                     d.compFiltersInLocal = newState
-                    text = if (newState) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+                    text = if (newState) "FILTER ON" else "FILTER OFF"
                     setBackgroundColor(Color.parseColor(if (newState) accentHex else "#3a3a3c"))
                     sendRawAsync(Pro2Commands.setCompFiltersIn(channel, newState))
                 }
@@ -2846,10 +2846,49 @@ class MainActivity : AppCompatActivity() {
         sendRawAsync(packet)
     }
 
+    /**
+     * Линейная интерполяция по точкам-подсказкам из списка команд Pro2.
+     * Подтверждено только для 3 параметров компрессора (threshold/attack/
+     * release) - у остальных таких точек нет, там остаётся сырое 0.00-1.00.
+     */
+    private fun interpolate(v: Float, points: List<Pair<Float, Float>>): Float {
+        val x = v.coerceIn(0f, 1f)
+        for (i in 0 until points.size - 1) {
+            val (x0, y0) = points[i]
+            val (x1, y1) = points[i + 1]
+            if (x <= x1) {
+                val t = if (x1 == x0) 0f else (x - x0) / (x1 - x0)
+                return y0 + (y1 - y0) * t
+            }
+        }
+        return points.last().second
+    }
+
+    // Подтверждено описанием в списке команд Pro2 (не реальным захватом
+    // формулы, но это прямая подсказка производителя, не догадка).
+    private val compThresholdPoints = listOf(0f to -50f, 0.35f to -25f, 0.65f to 0f, 1f to 25f)
+    private val compAttackPoints = listOf(0f to 0.2f, 0.35f to 1f, 0.65f to 6f, 1f to 20f)
+    private val compReleasePoints = listOf(0f to 0.05f, 0.35f to 0.2f, 0.65f to 0.8f, 1f to 3f)
+
+    private fun formatCompThreshold(v: Float): String = "%.1f dB".format(interpolate(v, compThresholdPoints))
+    private fun formatCompAttack(v: Float): String = "%.1f ms".format(interpolate(v, compAttackPoints))
+    private fun formatCompRelease(v: Float): String {
+        val sec = interpolate(v, compReleasePoints)
+        return if (sec < 1f) "%.0f ms".format(sec * 1000) else "%.2f s".format(sec)
+    }
+
+    /** Показывает реальные единицы там, где формула подтверждена, иначе сырое 0.00-1.00. */
+    private fun formatKnobValue(kind: ParamKind, v: Float): String = when (kind) {
+        ParamKind.COMP_THRESHOLD -> formatCompThreshold(v)
+        ParamKind.COMP_ATTACK -> formatCompAttack(v)
+        ParamKind.COMP_RELEASE -> formatCompRelease(v)
+        else -> "%.2f".format(v)
+    }
+
     private fun panLabelFor(v: Float): String = when {
-        v < 0.48f -> "Л %.0f".format((0.5f - v) * 200)
-        v > 0.52f -> "П %.0f".format((v - 0.5f) * 200)
-        else -> "ЦЕНТР"
+        v < 0.48f -> "L %.0f".format((0.5f - v) * 200)
+        v > 0.52f -> "R %.0f".format((v - 0.5f) * 200)
+        else -> "CENTER"
     }
 
     private fun updatePanUi(channel: Int, level: Float) {
@@ -2862,14 +2901,14 @@ class MainActivity : AppCompatActivity() {
     private fun updatePhantomUi(channel: Int, on: Boolean) {
         ConnectionHolder.channelData[channel].phantomLocal = on
         if (openDetailChannel != channel) return
-        detailPhantomButton?.text = if (on) "48V ВКЛ" else "48V ВЫКЛ"
+        detailPhantomButton?.text = if (on) "48V ON" else "48V OFF"
         detailPhantomButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
     }
 
     private fun updatePhaseUi(channel: Int, on: Boolean) {
         ConnectionHolder.channelData[channel].phaseLocal = on
         if (openDetailChannel != channel) return
-        detailPhaseButton?.text = if (on) "ФАЗА ИНВЕРТ" else "ФАЗА НОРМ"
+        detailPhaseButton?.text = if (on) "PHASE INV" else "PHASE NORM"
         detailPhaseButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
     }
 
@@ -2877,7 +2916,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateDynamicsKnobUi(views: DynamicsBlockViews?, kind: ParamKind, level: Float) {
         val pair = views?.knobViews?.get(kind) ?: return
         pair.first.value = level
-        pair.second.text = "%.2f".format(level)
+        pair.second.text = formatKnobValue(kind, level)
         if (kind == views.thresholdKind) views.graphView.threshold = level
         if (kind == views.ratioOrRangeKind) views.graphView.ratioOrRange = level
     }
@@ -2894,7 +2933,7 @@ class MainActivity : AppCompatActivity() {
         ConnectionHolder.channelData[channel].gateFiltersInLocal = on
         if (openDetailChannel != channel) return
         val views = detailGateDynViews ?: return
-        views.filtersInButton?.text = if (on) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+        views.filtersInButton?.text = if (on) "FILTER ON" else "FILTER OFF"
         views.filtersInButton?.setBackgroundColor(Color.parseColor(if (on) "#34c759" else "#3a3a3c"))
     }
 
@@ -3050,7 +3089,7 @@ class MainActivity : AppCompatActivity() {
                 // Раз это toggle - отправляем РОВНО один пакет на одно нажатие.
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка mute: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Mute error: ${e.message}" }
             }
         }
     }
@@ -3064,7 +3103,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка master fader: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Master fader error: ${e.message}" }
             }
         }
     }
@@ -3078,7 +3117,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка master mute: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Master mute error: ${e.message}" }
             }
         }
     }
@@ -3092,7 +3131,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка master solo: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Master solo error: ${e.message}" }
             }
         }
     }
@@ -3106,7 +3145,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка aux fader: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Aux fader error: ${e.message}" }
             }
         }
     }
@@ -3120,7 +3159,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка aux mute: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Aux mute error: ${e.message}" }
             }
         }
     }
@@ -3134,7 +3173,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка aux solo: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Aux solo error: ${e.message}" }
             }
         }
     }
@@ -3148,7 +3187,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка aux-шины fader: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Aux bus fader error: ${e.message}" }
             }
         }
     }
@@ -3162,7 +3201,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка aux-шины mute: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Aux bus mute error: ${e.message}" }
             }
         }
     }
@@ -3176,7 +3215,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка aux-шины solo: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Aux bus solo error: ${e.message}" }
             }
         }
     }
@@ -3190,7 +3229,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка VCA fader: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "VCA fader error: ${e.message}" }
             }
         }
     }
@@ -3204,7 +3243,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка VCA mute: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "VCA mute error: ${e.message}" }
             }
         }
     }
@@ -3218,7 +3257,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка VCA solo: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "VCA solo error: ${e.message}" }
             }
         }
     }
@@ -3232,7 +3271,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка aux send: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Aux send error: ${e.message}" }
             }
         }
     }
@@ -3246,7 +3285,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка EQ in: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "EQ in error: ${e.message}" }
             }
         }
     }
@@ -3260,7 +3299,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка EQ band: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "EQ band error: ${e.message}" }
             }
         }
     }
@@ -3279,7 +3318,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка EQ: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "EQ error: ${e.message}" }
             }
         }
     }
@@ -3293,7 +3332,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка compIn: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Comp in error: ${e.message}" }
             }
         }
     }
@@ -3315,7 +3354,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка компрессора: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Compressor error: ${e.message}" }
             }
         }
     }
@@ -3332,7 +3371,7 @@ class MainActivity : AppCompatActivity() {
                     if (attempt < 2) delay(20L)
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка solo: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Solo error: ${e.message}" }
             }
         }
     }
@@ -3345,7 +3384,7 @@ class MainActivity : AppCompatActivity() {
             try {
                 sendRaw(sock, address, port, packet)
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Ошибка отправки: ${e.message}" }
+                withContext(Dispatchers.Main) { textStatus.text = "Send error: ${e.message}" }
             }
         }
     }
