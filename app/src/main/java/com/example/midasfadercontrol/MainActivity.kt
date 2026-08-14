@@ -41,7 +41,7 @@ import java.nio.ByteBuffer
  *     which ones are confirmed vs. best-effort based on the address list.
  */
 // === Живая подписка на пульт (см. Pro2Commands.batchSubscribe) ===
-enum class ParamKind { FADER, MUTE, SOLO, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, PAN, PHANTOM, PHASE, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER }
+enum class ParamKind { FADER, MUTE, SOLO, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, PAN, PHANTOM, PHASE, GAIN_TRIM, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER }
 // Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX ШИНЫ, MASTER - мастер намеренно
 // в конце (по просьбе - обычно с ним работают реже всего).
 enum class StripMode { CHANNELS, AUX_RETURNS, AUX_BUS, VCA, MASTER }
@@ -76,6 +76,10 @@ data class ChannelData(
     // Вход (INPUT) - pan/phantom ПОДТВЕРЖДЕНЫ реальным захватом, phase - по
     // описанию в списке команд.
     var pan: Float = 0.5f,
+    // Основной GAIN (enInputGain) хранится в поле gain выше. Это - GAIN
+    // TRIM (enMicSplitStepGain) - раньше мы по ошибке называли gain TRIM'ом,
+    // теперь они разделены правильно.
+    var gainTrim: Float = 0f,
     var phantomLocal: Boolean = false,
     var phaseLocal: Boolean = false,
     // Gate - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным захватом трафика iPad.
@@ -1344,6 +1348,7 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_${i}_mute" to Triple(Pro2Commands.muteAddress(), ParamKind.MUTE, i),
                     "/h_${sid}_${i}_solo" to Triple(Pro2Commands.soloAddress(), ParamKind.SOLO, i),
                     "/h_${sid}_${i}_gain" to Triple(Pro2Commands.gainAddress(), ParamKind.GAIN, i),
+                    "/h_${sid}_${i}_gaintrim" to Triple(Pro2Commands.gainTrimAddress(), ParamKind.GAIN_TRIM, i),
                     "/h_${sid}_${i}_name" to Triple(Pro2Commands.nameAddress(), ParamKind.NAME, i),
                     "/h_${sid}_${i}_colour" to Triple(Pro2Commands.colourAddress(), ParamKind.COLOUR, i),
                     "/h_${sid}_${i}_meter" to Triple(Pro2Commands.meterAddress(), ParamKind.METER, i),
@@ -1613,6 +1618,13 @@ class MainActivity : AppCompatActivity() {
                 if (sub.kind == ParamKind.FADER) updateFaderUi(sub.channel, level)
                 else updateGainUi(sub.channel, level)
             }
+            ParamKind.GAIN_TRIM -> {
+                if (blob.size >= 4) {
+                    val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        .float.coerceIn(0f, 1f)
+                    updateGainTrimUi(sub.channel, level)
+                }
+            }
             ParamKind.COLOUR -> {
                 // ОКОНЧАТЕЛЬНО ПОДТВЕРЖДЕНО реальным захватом (сменили канал 1
                 // на красный прямо на пульте и поймали push): blob - это НЕ
@@ -1739,6 +1751,7 @@ class MainActivity : AppCompatActivity() {
                 if (openDetailChannel == sub.channel) {
                     detailHpFilterInButton?.text = if (on) "HP FILTER ON" else "HP FILTER OFF"
                     detailHpFilterInButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+                    detailEqViews?.let { it.graphView.hpOn = on; it.graphView.invalidate() }
                 }
             }
             ParamKind.LP_FILTER_IN -> {
@@ -1748,20 +1761,27 @@ class MainActivity : AppCompatActivity() {
                 if (openDetailChannel == sub.channel) {
                     detailLpFilterInButton?.text = if (on) "LP FILTER ON" else "LP FILTER OFF"
                     detailLpFilterInButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+                    detailEqViews?.let { it.graphView.lpOn = on; it.graphView.invalidate() }
                 }
             }
             ParamKind.HP_FILTER_FREQ -> {
                 if (blob.size >= 4) {
                     val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).float.coerceIn(0f, 1f)
                     ConnectionHolder.channelData[sub.channel].hpFilterFreq = level
-                    if (openDetailChannel == sub.channel) detailHpFreqSeek?.progress = (level * 1000).toInt()
+                    if (openDetailChannel == sub.channel) {
+                        detailHpFreqSeek?.progress = (level * 1000).toInt()
+                        detailEqViews?.let { it.graphView.hpFreq = level; it.graphView.invalidate() }
+                    }
                 }
             }
             ParamKind.LP_FILTER_FREQ -> {
                 if (blob.size >= 4) {
                     val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).float.coerceIn(0f, 1f)
                     ConnectionHolder.channelData[sub.channel].lpFilterFreq = level
-                    if (openDetailChannel == sub.channel) detailLpFreqSeek?.progress = (level * 1000).toInt()
+                    if (openDetailChannel == sub.channel) {
+                        detailLpFreqSeek?.progress = (level * 1000).toInt()
+                        detailEqViews?.let { it.graphView.lpFreq = level; it.graphView.invalidate() }
+                    }
                 }
             }
             ParamKind.INPUT_DELAY -> {
@@ -2079,11 +2099,17 @@ class MainActivity : AppCompatActivity() {
     /** Виджеты одной полосы EQ, пока детальный экран открыт - для живого обновления. */
     private data class EqBandViews(
         val activeButton: Button,
-        val freqSeek: SeekBar, val freqText: TextView,
-        val gainSeek: SeekBar, val gainText: TextView,
-        val widthSeek: SeekBar, val widthText: TextView
+        val freqKnob: RotaryKnobView, val freqText: TextView,
+        val gainKnob: RotaryKnobView, val gainText: TextView,
+        val widthKnob: RotaryKnobView, val widthText: TextView
     )
-    private data class EqBlockViews(val inButton: Button, val bands: Array<EqBandViews>)
+    private data class EqBlockViews(
+        val inButton: Button,
+        val bands: Array<EqBandViews>,
+        val graphView: EqCurveView,
+        val hpButton: Button,
+        val lpButton: Button
+    )
     private var detailEqViews: EqBlockViews? = null
     // Живые ссылки на виджеты вкладки INPUT, пока детальный экран открыт -
     // для подкрутки от push (тот же паттерн, что и detailEqViews).
@@ -2096,6 +2122,8 @@ class MainActivity : AppCompatActivity() {
     private var detailHpFreqSeek: SeekBar? = null
     private var detailLpFreqSeek: SeekBar? = null
     private var detailDelaySeek: SeekBar? = null
+    private var detailGainTrimKnobRef: RotaryKnobView? = null
+    private var detailGainTrimValueRef: TextView? = null
 
     /** Общая структура для вкладок COMP и GATE - сетка ручек + график + IN/фильтр. */
     private data class DynamicsBlockViews(
@@ -2182,9 +2210,12 @@ class MainActivity : AppCompatActivity() {
         if (bandIndex !in 0..3) return
         ConnectionHolder.channelData[channel].eqBandActiveLocal[bandIndex] = on
         if (openDetailChannel == channel) {
-            val btn = detailEqViews?.bands?.getOrNull(bandIndex)?.activeButton ?: return
+            val views = detailEqViews ?: return
+            val btn = views.bands.getOrNull(bandIndex)?.activeButton ?: return
             btn.text = if (on) "ON" else "OFF"
             btn.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+            views.graphView.bands.getOrNull(bandIndex)?.active = on
+            views.graphView.invalidate()
         }
     }
 
@@ -2192,15 +2223,19 @@ class MainActivity : AppCompatActivity() {
         if (bandIndex !in 0..3) return
         persistEq(channel, bandIndex, kind, level)
         if (openDetailChannel != channel) return
-        val band = detailEqViews?.bands?.getOrNull(bandIndex) ?: return
-        val (seek, text) = when (kind) {
-            ParamKind.EQ_FREQ -> band.freqSeek to band.freqText
-            ParamKind.EQ_GAIN -> band.gainSeek to band.gainText
-            ParamKind.EQ_WIDTH -> band.widthSeek to band.widthText
+        val views = detailEqViews ?: return
+        val band = views.bands.getOrNull(bandIndex) ?: return
+        val (knob, text) = when (kind) {
+            ParamKind.EQ_FREQ -> band.freqKnob to band.freqText
+            ParamKind.EQ_GAIN -> band.gainKnob to band.gainText
+            ParamKind.EQ_WIDTH -> band.widthKnob to band.widthText
             else -> return
         }
-        seek.progress = (level * 1000).toInt()
+        knob.value = level
         text.text = "%.2f".format(level)
+        if (kind == ParamKind.EQ_FREQ) views.graphView.bands.getOrNull(bandIndex)?.freq = level
+        if (kind == ParamKind.EQ_GAIN) views.graphView.bands.getOrNull(bandIndex)?.gain = level
+        if (kind == ParamKind.EQ_FREQ || kind == ParamKind.EQ_GAIN) views.graphView.invalidate()
     }
 
     private fun updateMasterFaderUi(masterIndex: Int, level: Float) {
@@ -2286,6 +2321,8 @@ class MainActivity : AppCompatActivity() {
             detailHpFreqSeek = null
             detailLpFreqSeek = null
             detailDelaySeek = null
+            detailGainTrimKnobRef = null
+            detailGainTrimValueRef = null
             detailGateDynViews = null
         }
 
@@ -2376,7 +2413,7 @@ class MainActivity : AppCompatActivity() {
         val tabGate = view.findViewById<Button>(R.id.btnTabGate)
         val inputBlock = view.findViewById<android.widget.LinearLayout>(R.id.inputBlockContent)
         val compBlock = view.findViewById<android.widget.LinearLayout>(R.id.compBlockContent)
-        val sendsBlock = view.findViewById<android.widget.LinearLayout>(R.id.sendsBlockContent)
+        val sendsBlock = view.findViewById<android.widget.HorizontalScrollView>(R.id.sendsBlockContent)
         val eqBlock = view.findViewById<android.widget.LinearLayout>(R.id.eqBlockContent)
         val gateBlock = view.findViewById<android.widget.LinearLayout>(R.id.gateBlockContent)
 
@@ -2443,6 +2480,150 @@ class MainActivity : AppCompatActivity() {
         }
         showInput()
 
+        // --- Вкладка SENDS: 16 посылов, таблица горизонтальных полос ---
+        // НЕ подтверждено реальным захватом трафика - см. заметку в
+        // Pro2Commands.kt про enSubSendLevel1..16.
+        val sendsRow = view.findViewById<android.widget.LinearLayout>(R.id.sendsBlockRow)
+        sendsRow.removeAllViews()
+        val sendViews = arrayOfNulls<Pair<SeekBar, TextView>>(16)
+        val sendsData = ConnectionHolder.channelData[channel]
+        for (bus in 1..16) {
+            val column = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    (86 * resources.displayMetrics.density).toInt(),
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT
+                ).apply { marginEnd = (4 * resources.displayMetrics.density).toInt() }
+            }
+            val label = TextView(this).apply {
+                text = "AUX $bus"
+                setTextColor(Color.parseColor("#ff9f0a"))
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                textSize = 10f
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                maxLines = 1
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+            val valueText = TextView(this).apply {
+                text = "%.2f".format(sendsData.auxSends[bus - 1])
+                setTextColor(Color.parseColor("#aaaaaa"))
+                textSize = 11f
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                maxLines = 1
+                setPadding(0, 4, 0, 4)
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+            // Вертикальный фейдер на всю доступную высоту - та же техника
+            // подгонки под реальную высоту экрана, что и везде в приложении.
+            val faderContainer = android.widget.FrameLayout(this).apply {
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+                )
+            }
+            val seek = SeekBar(this).apply {
+                max = 1000
+                progress = (sendsData.auxSends[bus - 1] * 1000).toInt()
+                progressTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#ff9f0a"))
+                thumbTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#ffffff"))
+                rotation = 270f
+                layoutParams = android.widget.FrameLayout.LayoutParams(220, 60, android.view.Gravity.CENTER)
+            }
+            faderContainer.addView(seek)
+            faderContainer.viewTreeObserver.addOnGlobalLayoutListener(
+                object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                    override fun onGlobalLayout() {
+                        val h = faderContainer.height
+                        if (h > 0) {
+                            val p = seek.layoutParams
+                            if (p.width != h) {
+                                p.width = h
+                                seek.layoutParams = p
+                            }
+                            faderContainer.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                        }
+                    }
+                }
+            )
+            var lastSend = 0L
+            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                    val level = progress / 1000f
+                    valueText.text = "%.2f".format(level)
+                    if (!fromUser) return
+                    sendsData.auxSends[bus - 1] = level
+                    val now = System.currentTimeMillis()
+                    if (now - lastSend >= minSendIntervalMs) {
+                        lastSend = now
+                        sendSubSend(channel, bus, level)
+                    }
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {
+                    val level = (sb?.progress ?: 0) / 1000f
+                    sendsData.auxSends[bus - 1] = level
+                    sendSubSend(channel, bus, level)
+                }
+            })
+
+            // Отдельно от уровня посыла - ПОДТВЕРЖДЕНО реальным захватом.
+            val btnPreFade = Button(this).apply {
+                backgroundTintList = null
+                minHeight = 0
+                textSize = 10f
+                setPadding(8, 6, 8, 6)
+                text = if (sendsData.auxSendPreFade[bus - 1]) "PRE" else "POST"
+                setTextColor(Color.parseColor("#ffffff"))
+                setBackgroundColor(Color.parseColor("#3a3a3c"))
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = 8 }
+                setOnClickListener {
+                    val newState = !ConnectionHolder.channelData[channel].auxSendPreFade[bus - 1]
+                    ConnectionHolder.channelData[channel].auxSendPreFade[bus - 1] = newState
+                    text = if (newState) "PRE" else "POST"
+                    sendRawAsync(Pro2Commands.setSubSendPreFade(channel, bus, newState))
+                }
+            }
+            val btnEnable = Button(this).apply {
+                backgroundTintList = null
+                minHeight = 0
+                textSize = 10f
+                setPadding(8, 6, 8, 6)
+                text = if (sendsData.auxSendEnable[bus - 1]) "ON" else "OFF"
+                setTextColor(Color.parseColor("#ffffff"))
+                setBackgroundColor(Color.parseColor(if (sendsData.auxSendEnable[bus - 1]) "#34c759" else "#3a3a3c"))
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = 4 }
+                setOnClickListener {
+                    val newState = !ConnectionHolder.channelData[channel].auxSendEnable[bus - 1]
+                    ConnectionHolder.channelData[channel].auxSendEnable[bus - 1] = newState
+                    text = if (newState) "ON" else "OFF"
+                    setBackgroundColor(Color.parseColor(if (newState) "#34c759" else "#3a3a3c"))
+                    sendRawAsync(Pro2Commands.setSubSendEnable(channel, bus, newState))
+                }
+            }
+
+            column.addView(label)
+            column.addView(valueText)
+            column.addView(faderContainer)
+            column.addView(btnPreFade)
+            column.addView(btnEnable)
+            sendsRow.addView(column)
+            sendViews[bus - 1] = seek to valueText
+        }
+        @Suppress("UNCHECKED_CAST")
+        detailSendViews = sendViews as Array<Pair<SeekBar, TextView>>
+
         // --- Вкладка COMP: строится программно (сетка ручек + график) ---
         compBlock.removeAllViews()
         buildDynamicsBlock(compBlock, channel, TransferCurveView.Mode.COMPRESSOR)
@@ -2466,6 +2647,18 @@ class MainActivity : AppCompatActivity() {
             ConnectionHolder.channelData[channel].gain = v
             sendGain(channel, v)
         }
+
+        val detailGainTrimKnob = view.findViewById<RotaryKnobView>(R.id.knobDetailGainTrim)
+        val detailGainTrimValue = view.findViewById<TextView>(R.id.textDetailGainTrimValue)
+        detailGainTrimKnob.value = ConnectionHolder.channelData[channel].gainTrim
+        detailGainTrimValue.text = "%.2f".format(ConnectionHolder.channelData[channel].gainTrim)
+        detailGainTrimKnob.onValueChanged = { v ->
+            detailGainTrimValue.text = "%.2f".format(v)
+            ConnectionHolder.channelData[channel].gainTrim = v
+            sendRawAsync(Pro2Commands.setGainTrim(channel, v))
+        }
+        detailGainTrimKnobRef = detailGainTrimKnob
+        detailGainTrimValueRef = detailGainTrimValue
 
         // --- Вкладка INPUT: 48V, фаза, панорама, имя, цвет ---
         val inputData = ConnectionHolder.channelData[channel]
@@ -2659,101 +2852,6 @@ class MainActivity : AppCompatActivity() {
         })
 
         // --- Вкладка SENDS: 16 посылов, строится программно ---
-        // НЕ подтверждено реальным захватом трафика - см. заметку в
-        // Pro2Commands.kt про enSubSendLevel1..16.
-        sendsBlock.removeAllViews()
-        val sendViews = arrayOfNulls<Pair<SeekBar, TextView>>(16)
-        val data = ConnectionHolder.channelData[channel]
-        for (bus in 1..16) {
-            val row = android.widget.LinearLayout(this).apply {
-                orientation = android.widget.LinearLayout.VERTICAL
-                setPadding(0, 0, 0, 24)
-            }
-            val label = TextView(this).apply {
-                text = "AUX $bus"
-                setTextColor(Color.parseColor("#ff9f0a"))
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                textSize = 12f
-            }
-            // Отдельно от уровня посыла - ПОДТВЕРЖДЕНО реальным захватом.
-            val toggleRow = android.widget.LinearLayout(this).apply {
-                orientation = android.widget.LinearLayout.HORIZONTAL
-            }
-            val btnEnable = Button(this).apply {
-                backgroundTintList = null
-                minHeight = 0
-                textSize = 10f
-                setPadding(16, 4, 16, 4)
-                text = if (data.auxSendEnable[bus - 1]) "EN" else "OFF"
-                setTextColor(Color.parseColor("#ffffff"))
-                setBackgroundColor(Color.parseColor(if (data.auxSendEnable[bus - 1]) "#ff9f0a" else "#3a3a3c"))
-                setOnClickListener {
-                    val newState = !ConnectionHolder.channelData[channel].auxSendEnable[bus - 1]
-                    ConnectionHolder.channelData[channel].auxSendEnable[bus - 1] = newState
-                    text = if (newState) "EN" else "OFF"
-                    setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
-                    sendRawAsync(Pro2Commands.setSubSendEnable(channel, bus, newState))
-                }
-            }
-            val btnPreFade = Button(this).apply {
-                backgroundTintList = null
-                minHeight = 0
-                textSize = 10f
-                setPadding(16, 4, 16, 4)
-                text = if (data.auxSendPreFade[bus - 1]) "PRE" else "POST"
-                setTextColor(Color.parseColor("#ffffff"))
-                setBackgroundColor(Color.parseColor("#3a3a3c"))
-                setOnClickListener {
-                    val newState = !ConnectionHolder.channelData[channel].auxSendPreFade[bus - 1]
-                    ConnectionHolder.channelData[channel].auxSendPreFade[bus - 1] = newState
-                    text = if (newState) "PRE" else "POST"
-                    sendRawAsync(Pro2Commands.setSubSendPreFade(channel, bus, newState))
-                }
-            }
-            val preParams = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { marginStart = 8 }
-            toggleRow.addView(btnEnable)
-            toggleRow.addView(btnPreFade, preParams)
-            val seek = SeekBar(this).apply {
-                max = 1000
-                progress = (data.auxSends[bus - 1] * 1000).toInt()
-            }
-            val valueText = TextView(this).apply {
-                text = "%.2f".format(data.auxSends[bus - 1])
-                setTextColor(Color.parseColor("#aaaaaa"))
-                textSize = 12f
-            }
-            var lastSend = 0L
-            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val level = progress / 1000f
-                    valueText.text = "%.2f".format(level)
-                    if (!fromUser) return
-                    data.auxSends[bus - 1] = level
-                    val now = System.currentTimeMillis()
-                    if (now - lastSend >= minSendIntervalMs) {
-                        lastSend = now
-                        sendSubSend(channel, bus, level)
-                    }
-                }
-                override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) {
-                    val level = (sb?.progress ?: 0) / 1000f
-                    data.auxSends[bus - 1] = level
-                    sendSubSend(channel, bus, level)
-                }
-            })
-            row.addView(label)
-            row.addView(toggleRow)
-            row.addView(seek)
-            row.addView(valueText)
-            sendsBlock.addView(row)
-            sendViews[bus - 1] = seek to valueText
-        }
-        @Suppress("UNCHECKED_CAST")
-        detailSendViews = sendViews as Array<Pair<SeekBar, TextView>>
     }
 
     /**
@@ -2763,12 +2861,24 @@ class MainActivity : AppCompatActivity() {
      * Подтверждено ОПИСАНИЯМИ в списке команд, НЕ подтверждено реальным
      * захватом трафика.
      */
+    /**
+     * Строит вкладку EQ: интерактивный график (точки полос + HPF/LPF можно
+     * таскать пальцем прямо по нему) + компактные карточки с мини-ручками
+     * под ним. Подтверждено ОПИСАНИЯМИ в списке команд, HPF/LPF -
+     * ПОДТВЕРЖДЕНО реальным захватом (см. Pro2Commands.kt).
+     */
     private fun buildEqBlock(container: android.widget.LinearLayout, channel: Int) {
         val data = ConnectionHolder.channelData[channel]
         val bandNames = arrayOf("BASS", "LOW-MID", "MID-HIGH", "TREBLE")
         val bandKinds = arrayOf(Pro2Commands.EqBand.BASS, Pro2Commands.EqBand.LOW_MID, Pro2Commands.EqBand.MID_HIGH, Pro2Commands.EqBand.TREBLE)
+        val bandColours = arrayOf(
+            Color.parseColor("#34c759"), Color.parseColor("#ffcc00"),
+            Color.parseColor("#ff9500"), Color.parseColor("#af52de")
+        )
 
+        // --- Заголовок: EQ IN ---
         val eqInButton = Button(this).apply {
+            backgroundTintList = null
             text = if (data.eqInLocal) "EQ ON" else "EQ OFF"
             setTextColor(Color.parseColor("#ffffff"))
             setBackgroundColor(Color.parseColor(if (data.eqInLocal) "#ff9f0a" else "#3a3a3c"))
@@ -2783,20 +2893,110 @@ class MainActivity : AppCompatActivity() {
         container.addView(eqInButton, android.widget.LinearLayout.LayoutParams(
             android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
             android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = 24 })
+        ).apply { bottomMargin = 8 })
 
+        // --- Интерактивный график - точки можно таскать пальцем ---
+        val graph = EqCurveView(this)
+        for (i in 0 until 4) {
+            graph.bands[i] = EqCurveView.Band(data.eqFreq[i], data.eqGain[i], data.eqBandActiveLocal[i], bandColours[i])
+        }
+        graph.hpFreq = data.hpFilterFreq
+        graph.hpOn = data.hpFilterInLocal
+        graph.lpFreq = data.lpFilterFreq
+        graph.lpOn = data.lpFilterInLocal
+        container.addView(graph, android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+            (150 * resources.displayMetrics.density).toInt()
+        ).apply { bottomMargin = 12 })
+
+        // --- HPF/LPF - те же данные и команды, что и во вкладке INPUT,
+        // просто продублированы здесь для наглядности на графике. ---
+        val hpLpRow = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+        }
+        val hpButton = Button(this).apply {
+            backgroundTintList = null
+            minHeight = 0
+            textSize = 11f
+            text = if (data.hpFilterInLocal) "HPF ON" else "HPF OFF"
+            setTextColor(Color.parseColor("#ffffff"))
+            setBackgroundColor(Color.parseColor(if (data.hpFilterInLocal) "#34c759" else "#3a3a3c"))
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                .apply { marginEnd = 6 }
+            setOnClickListener {
+                val newState = !ConnectionHolder.channelData[channel].hpFilterInLocal
+                ConnectionHolder.channelData[channel].hpFilterInLocal = newState
+                text = if (newState) "HPF ON" else "HPF OFF"
+                setBackgroundColor(Color.parseColor(if (newState) "#34c759" else "#3a3a3c"))
+                graph.hpOn = newState
+                graph.invalidate()
+                sendRawAsync(Pro2Commands.setHpFilterIn(channel, newState))
+            }
+        }
+        val lpButton = Button(this).apply {
+            backgroundTintList = null
+            minHeight = 0
+            textSize = 11f
+            text = if (data.lpFilterInLocal) "LPF ON" else "LPF OFF"
+            setTextColor(Color.parseColor("#ffffff"))
+            setBackgroundColor(Color.parseColor(if (data.lpFilterInLocal) "#af52de" else "#3a3a3c"))
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener {
+                val newState = !ConnectionHolder.channelData[channel].lpFilterInLocal
+                ConnectionHolder.channelData[channel].lpFilterInLocal = newState
+                text = if (newState) "LPF ON" else "LPF OFF"
+                setBackgroundColor(Color.parseColor(if (newState) "#af52de" else "#3a3a3c"))
+                graph.lpOn = newState
+                graph.invalidate()
+                sendRawAsync(Pro2Commands.setLpFilterIn(channel, newState))
+            }
+        }
+        hpLpRow.addView(hpButton)
+        hpLpRow.addView(lpButton)
+        container.addView(hpLpRow, android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = 12 })
+
+        graph.onNodeDragged = { bandIndex, freq, gain ->
+            when (bandIndex) {
+                -1 -> {
+                    ConnectionHolder.channelData[channel].hpFilterFreq = freq
+                    sendRawAsync(Pro2Commands.setHpFilterFreq(channel, freq))
+                }
+                -2 -> {
+                    ConnectionHolder.channelData[channel].lpFilterFreq = freq
+                    sendRawAsync(Pro2Commands.setLpFilterFreq(channel, freq))
+                }
+                else -> {
+                    val band = bandKinds[bandIndex]
+                    ConnectionHolder.channelData[channel].eqFreq[bandIndex] = freq
+                    ConnectionHolder.channelData[channel].eqGain[bandIndex] = gain
+                    sendEqParam(channel, band, ParamKind.EQ_FREQ, freq)
+                    sendEqParam(channel, band, ParamKind.EQ_GAIN, gain)
+                    detailEqViews?.bands?.getOrNull(bandIndex)?.let {
+                        it.freqKnob.value = freq
+                        it.freqText.text = "%.2f".format(freq)
+                        it.gainKnob.value = gain
+                        it.gainText.text = "%.2f".format(gain)
+                    }
+                }
+            }
+        }
+
+        // --- Компактные карточки полос: имя + вкл/выкл + 3 мини-ручки ---
         val bandViews = Array(4) { bandIndex ->
             val band = bandKinds[bandIndex]
 
             val header = android.widget.LinearLayout(this).apply {
                 orientation = android.widget.LinearLayout.HORIZONTAL
-                setPadding(0, if (bandIndex == 0) 0 else 24, 0, 8)
+                setPadding(0, if (bandIndex == 0) 0 else 10, 0, 6)
             }
             val bandLabel = TextView(this).apply {
                 text = bandNames[bandIndex]
-                setTextColor(Color.parseColor("#ff9f0a"))
+                setTextColor(bandColours[bandIndex])
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
-                textSize = 13f
+                textSize = 12f
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f
                 )
@@ -2806,6 +3006,7 @@ class MainActivity : AppCompatActivity() {
                 textSize = 10f
                 minHeight = 0
                 minimumHeight = 0
+                backgroundTintList = null
                 setPadding(16, 4, 16, 4)
                 setTextColor(Color.parseColor("#ffffff"))
                 setBackgroundColor(Color.parseColor(if (data.eqBandActiveLocal[bandIndex]) "#ff9f0a" else "#3a3a3c"))
@@ -2814,6 +3015,8 @@ class MainActivity : AppCompatActivity() {
                     ConnectionHolder.channelData[channel].eqBandActiveLocal[bandIndex] = newState
                     text = if (newState) "ON" else "OFF"
                     setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+                    graph.bands[bandIndex].active = newState
+                    graph.invalidate()
                     sendEqBandActive(channel, band)
                 }
             }
@@ -2821,52 +3024,60 @@ class MainActivity : AppCompatActivity() {
             header.addView(activeButton)
             container.addView(header)
 
-            fun makeRow(label: String, initial: Float, kind: ParamKind): Pair<SeekBar, TextView> {
-                val rowLabel = TextView(this).apply {
+            val knobRow = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+            }
+            fun makeKnob(label: String, initial: Float, kind: ParamKind): Pair<RotaryKnobView, TextView> {
+                val cell = android.widget.LinearLayout(this).apply {
+                    orientation = android.widget.LinearLayout.VERTICAL
+                    gravity = android.view.Gravity.CENTER_HORIZONTAL
+                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                }
+                val cellLabel = TextView(this).apply {
                     text = label
                     setTextColor(Color.parseColor("#8e8e93"))
                     textSize = 10f
                 }
-                val seek = SeekBar(this).apply { max = 1000; progress = (initial * 1000).toInt() }
+                val knob = RotaryKnobView(this).apply {
+                    value = initial
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        (52 * resources.displayMetrics.density).toInt(),
+                        (52 * resources.displayMetrics.density).toInt()
+                    ).apply { topMargin = 4; bottomMargin = 4 }
+                }
                 val valueText = TextView(this).apply {
                     text = "%.2f".format(initial)
                     setTextColor(Color.parseColor("#aaaaaa"))
-                    textSize = 11f
+                    textSize = 10f
                 }
                 var lastSend = 0L
-                seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                        val level = progress / 1000f
-                        valueText.text = "%.2f".format(level)
-                        if (!fromUser) return
-                        persistEq(channel, bandIndex, kind, level)
-                        val now = System.currentTimeMillis()
-                        if (now - lastSend >= minSendIntervalMs) {
-                            lastSend = now
-                            sendEqParam(channel, band, kind, level)
-                        }
+                knob.onValueChanged = { v ->
+                    valueText.text = "%.2f".format(v)
+                    persistEq(channel, bandIndex, kind, v)
+                    if (kind == ParamKind.EQ_FREQ) { graph.bands[bandIndex].freq = v; graph.invalidate() }
+                    if (kind == ParamKind.EQ_GAIN) { graph.bands[bandIndex].gain = v; graph.invalidate() }
+                    val now = System.currentTimeMillis()
+                    if (now - lastSend >= minSendIntervalMs) {
+                        lastSend = now
+                        sendEqParam(channel, band, kind, v)
                     }
-                    override fun onStartTrackingTouch(sb: SeekBar?) {}
-                    override fun onStopTrackingTouch(sb: SeekBar?) {
-                        val level = (sb?.progress ?: 0) / 1000f
-                        persistEq(channel, bandIndex, kind, level)
-                        sendEqParam(channel, band, kind, level)
-                    }
-                })
-                container.addView(rowLabel)
-                container.addView(seek)
-                container.addView(valueText)
-                return seek to valueText
+                }
+                cell.addView(cellLabel)
+                cell.addView(knob)
+                cell.addView(valueText)
+                knobRow.addView(cell)
+                return knob to valueText
             }
 
-            val (freqSeek, freqText) = makeRow("FREQ", data.eqFreq[bandIndex], ParamKind.EQ_FREQ)
-            val (gainSeek, gainText) = makeRow("GAIN", data.eqGain[bandIndex], ParamKind.EQ_GAIN)
-            val (widthSeek, widthText) = makeRow("WIDTH", data.eqWidth[bandIndex], ParamKind.EQ_WIDTH)
+            val (freqKnob, freqText) = makeKnob("FREQ", data.eqFreq[bandIndex], ParamKind.EQ_FREQ)
+            val (gainKnob, gainText) = makeKnob("GAIN", data.eqGain[bandIndex], ParamKind.EQ_GAIN)
+            val (widthKnob, widthText) = makeKnob("WIDTH", data.eqWidth[bandIndex], ParamKind.EQ_WIDTH)
+            container.addView(knobRow)
 
-            EqBandViews(activeButton, freqSeek, freqText, gainSeek, gainText, widthSeek, widthText)
+            EqBandViews(activeButton, freqKnob, freqText, gainKnob, gainText, widthKnob, widthText)
         }
 
-        detailEqViews = EqBlockViews(eqInButton, bandViews)
+        detailEqViews = EqBlockViews(eqInButton, bandViews, graph, hpButton, lpButton)
     }
 
     private fun persistEq(channel: Int, bandIndex: Int, kind: ParamKind, level: Float) {
@@ -2956,8 +3167,8 @@ class MainActivity : AppCompatActivity() {
         }
         val graphParams = android.widget.LinearLayout.LayoutParams(
             android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-            (180 * resources.displayMetrics.density).toInt()
-        ).apply { bottomMargin = 20 }
+            (130 * resources.displayMetrics.density).toInt()
+        ).apply { bottomMargin = 12 }
         container.addView(graph, graphParams)
 
         // --- Сетка ручек (2 в ряд) ---
@@ -2993,7 +3204,7 @@ class MainActivity : AppCompatActivity() {
                 container.addView(row, android.widget.LinearLayout.LayoutParams(
                     android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = 16 })
+                ).apply { bottomMargin = 8 })
             }
             val cell = android.widget.LinearLayout(this).apply {
                 orientation = android.widget.LinearLayout.VERTICAL
@@ -3008,9 +3219,9 @@ class MainActivity : AppCompatActivity() {
             val knob = RotaryKnobView(this).apply {
                 value = initial
                 layoutParams = android.widget.LinearLayout.LayoutParams(
-                    (72 * resources.displayMetrics.density).toInt(),
-                    (72 * resources.displayMetrics.density).toInt()
-                ).apply { topMargin = 6; bottomMargin = 6 }
+                    (58 * resources.displayMetrics.density).toInt(),
+                    (58 * resources.displayMetrics.density).toInt()
+                ).apply { topMargin = 4; bottomMargin = 4 }
             }
             val valueText = TextView(this).apply {
                 text = formatKnobValue(kind, initial)
@@ -3263,6 +3474,14 @@ class MainActivity : AppCompatActivity() {
             val dv = detailViews ?: return
             dv.gainKnob.value = level
             dv.gainValueText.text = "%.2f".format(level)
+        }
+    }
+
+    private fun updateGainTrimUi(channel: Int, level: Float) {
+        ConnectionHolder.channelData[channel].gainTrim = level
+        if (openDetailChannel == channel) {
+            detailGainTrimKnobRef?.value = level
+            detailGainTrimValueRef?.text = "%.2f".format(level)
         }
     }
 
@@ -3667,6 +3886,8 @@ class MainActivity : AppCompatActivity() {
             detailHpFreqSeek = null
             detailLpFreqSeek = null
             detailDelaySeek = null
+            detailGainTrimKnobRef = null
+            detailGainTrimValueRef = null
             detailGateDynViews = null
             return
         }

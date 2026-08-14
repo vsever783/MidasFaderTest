@@ -66,7 +66,13 @@ object Pro2Commands {
     // происходит при вращении ручки TRIM в реальном приложении - имя параметра
     // в оф. списке говорит про "micsplit return gain", но по факту именно он
     // управляет тем, что в интерфейсе выглядит как input gain trim.
-    fun gainAddress() = "/enPPCRotaryMessage/$GROUP/enMicSplitStepGain"
+    // ВАЖНО: на пульте на самом деле ДВА разных гейна (подтверждено реальным
+    // захватом обоих):
+    // - enInputGain - основной входной GAIN (аналоговый преамп)
+    // - enMicSplitStepGain - GAIN TRIM (доп. подстройка). Раньше мы по
+    //   ошибке называли ЭТОТ параметр просто "GAIN" - на самом деле это TRIM.
+    fun gainAddress() = "/enPPCRotaryMessage/$GROUP/enInputGain"
+    fun gainTrimAddress() = "/enPPCRotaryMessage/$GROUP/enMicSplitStepGain"
     fun nameAddress() = "/enPPCStringMessage/$GROUP/enPathname"
     fun colourAddress() = "/enPPCIntegerMessage/$GROUP/enChannelColour"
     // Подтверждено реальным трафиком (метры в самом начале проекта): только чтение,
@@ -133,6 +139,9 @@ object Pro2Commands {
 
     fun setGain(channelIndex: Int, level: Float): ByteArray =
         OscUtil.encode(gainAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
+
+    fun setGainTrim(channelIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(gainTrimAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
 
     /** argbColor - standard Android ARGB packed int, e.g. from Color.argb(255, r, g, b). */
     fun setColour(channelIndex: Int, argbColor: Int): ByteArray =
@@ -233,6 +242,9 @@ object Pro2Commands {
 
     fun getGain(channelIndex: Int): ByteArray =
         OscUtil.encode(gainAddress(), listOf(channelIndex))
+
+    fun getGainTrim(channelIndex: Int): ByteArray =
+        OscUtil.encode(gainTrimAddress(), listOf(channelIndex))
 
     fun getName(channelIndex: Int): ByteArray =
         OscUtil.encode(nameAddress(), listOf(channelIndex))

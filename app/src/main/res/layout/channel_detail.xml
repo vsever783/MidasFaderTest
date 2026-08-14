@@ -131,30 +131,80 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
                 android:gravity="center_horizontal"
-                android:padding="20dp">
+                android:padding="12dp">
 
-                <TextView
-                    android:layout_width="wrap_content"
+                <!-- ВАЖНО: на пульте два разных гейна (оба подтверждены
+                     реальным захватом) - основной GAIN (enInputGain) и
+                     отдельный GAIN TRIM (enMicSplitStepGain). Раньше мы по
+                     ошибке называли TRIM просто "GAIN" - теперь разделены. -->
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="GAIN"
-                    android:textColor="#ff9f0a"
-                    android:textStyle="bold"
-                    android:textSize="14sp"
-                    android:layout_marginBottom="12dp" />
+                    android:orientation="horizontal"
+                    android:gravity="center_horizontal">
 
-                <com.example.midasfadercontrol.RotaryKnobView
-                    android:id="@+id/knobDetailGain"
-                    android:layout_width="120dp"
-                    android:layout_height="120dp" />
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        android:gravity="center_horizontal">
 
-                <TextView
-                    android:id="@+id/textDetailGainValue"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="0,00"
-                    android:textColor="#8e8e93"
-                    android:textSize="14sp"
-                    android:layout_marginTop="12dp" />
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="GAIN"
+                            android:textColor="#ff9f0a"
+                            android:textStyle="bold"
+                            android:textSize="14sp"
+                            android:layout_marginBottom="12dp" />
+
+                        <com.example.midasfadercontrol.RotaryKnobView
+                            android:id="@+id/knobDetailGain"
+                            android:layout_width="100dp"
+                            android:layout_height="100dp" />
+
+                        <TextView
+                            android:id="@+id/textDetailGainValue"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="0,00"
+                            android:textColor="#8e8e93"
+                            android:textSize="14sp"
+                            android:layout_marginTop="12dp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        android:gravity="center_horizontal">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="GAIN TRIM"
+                            android:textColor="#ff9f0a"
+                            android:textStyle="bold"
+                            android:textSize="14sp"
+                            android:layout_marginBottom="12dp" />
+
+                        <com.example.midasfadercontrol.RotaryKnobView
+                            android:id="@+id/knobDetailGainTrim"
+                            android:layout_width="100dp"
+                            android:layout_height="100dp" />
+
+                        <TextView
+                            android:id="@+id/textDetailGainTrimValue"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="0,00"
+                            android:textColor="#8e8e93"
+                            android:textSize="14sp"
+                            android:layout_marginTop="12dp" />
+                    </LinearLayout>
+                </LinearLayout>
 
                 <!-- 48V и переворот фазы - ПОДТВЕРЖДЕНО реальным захватом
                      (48V) / списком команд (фаза). -->
@@ -162,7 +212,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
-                    android:layout_marginTop="20dp">
+                    android:layout_marginTop="12dp">
 
                     <Button
                         android:id="@+id/btnDetailPhantom"
@@ -196,7 +246,7 @@
                     android:textColor="#ff9f0a"
                     android:textStyle="bold"
                     android:textSize="12sp"
-                    android:layout_marginTop="24dp" />
+                    android:layout_marginTop="12dp" />
                 <SeekBar
                     android:id="@+id/seekDetailPan"
                     android:layout_width="match_parent"
@@ -216,7 +266,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
-                    android:layout_marginTop="24dp">
+                    android:layout_marginTop="12dp">
 
                     <EditText
                         android:id="@+id/editDetailChannelName"
@@ -260,7 +310,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
-                    android:layout_marginTop="24dp">
+                    android:layout_marginTop="12dp">
 
                     <Button
                         android:id="@+id/btnDetailHpFilterIn"
@@ -338,25 +388,16 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="20dp"
+                android:padding="12dp"
                 android:visibility="gone" />
             <!-- Заполняется программно (сетка ручек + график) в openChannelDetail() -->
-
-            <LinearLayout
-                android:id="@+id/sendsBlockContent"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="20dp"
-                android:visibility="gone" />
-            <!-- Заполняется программно (16 aux-посылов) в openChannelDetail() -->
 
             <LinearLayout
                 android:id="@+id/eqBlockContent"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="20dp"
+                android:padding="12dp"
                 android:visibility="gone" />
             <!-- Заполняется программно (4 полосы EQ) в openChannelDetail() -->
 
@@ -365,12 +406,37 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="20dp"
+                android:padding="12dp"
                 android:visibility="gone" />
             <!-- Заполняется программно (Gate) в openChannelDetail() -->
 
           </LinearLayout>
         </ScrollView>
+
+        <!--
+            SENDS - НЕ внутри общей вертикальной прокрутки (в отличие от
+            остальных вкладок): у него уже есть своя ГОРИЗОНТАЛЬНАЯ прокрутка
+            для 16 колонок, а высота нужна ВСЯ доступная (для вертикальных
+            фейдеров), а не гадание с фиксированным dp. Поэтому - отдельный
+            равноправный элемент рядом со ScrollView, а не внутри него.
+        -->
+        <HorizontalScrollView
+            android:id="@+id/sendsBlockContent"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:scrollbars="none"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/sendsBlockRow"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:orientation="horizontal"
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp" />
+        </HorizontalScrollView>
+        <!-- Заполняется программно (16 aux-посылов, таблица-полосы) в openChannelDetail() -->
 
         <!--
             Постоянная боковая панель - видна независимо от того, какой блок
