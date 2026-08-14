@@ -82,6 +82,15 @@ object Pro2Commands {
     fun phantomPowerAddress() = "/enPPCSwitchMessage/$GROUP/enMicSplitPhantomPowerIn"
     fun phaseAddress() = "/enPPCSwitchMessage/$GROUP/enInputPhaseIn"
 
+    // === HP/LP фильтры и задержка входа - ПОДТВЕРЖДЕНО реальным трафиком iPad. ===
+    fun hpFilterInAddress() = "/enPPCSwitchMessage/$GROUP/enInputHighPassFltIn"
+    fun hpFilterFreqAddress() = "/enPPCRotaryMessage/$GROUP/enInputHighPassFltFrequency"
+    fun hpFilterSlopeAddress() = "/enPPCIntegerMessage/$GROUP/enInputHighPassFltSlope"
+    fun lpFilterInAddress() = "/enPPCSwitchMessage/$GROUP/enInputLowPassFltIn"
+    fun lpFilterFreqAddress() = "/enPPCRotaryMessage/$GROUP/enInputLowPassFltFrequency"
+    fun lpFilterSlopeAddress() = "/enPPCIntegerMessage/$GROUP/enInputLowPassFltSlope"
+    fun inputDelayAddress() = "/enPPCRotaryMessage/$GROUP/enInputDelay"
+
     // === Gate/Expander - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным трафиком iPad
     // (большой захват "all config"). ===
     fun gateInAddress() = "/enPPCSwitchMessage/$GROUP/enExpGateIn"
@@ -93,6 +102,11 @@ object Pro2Commands {
     fun gateTransientAddress() = "/enPPCRotaryMessage/$GROUP/enExpanderGateTransient"
     fun gateFilterFreqAddress() = "/enPPCRotaryMessage/$GROUP/enExpanderGateFilterFrequency"
     fun gateFiltersInAddress() = "/enPPCSwitchMessage/$GROUP/enExpGateFiltersIn"
+    // Метры снижения усиления (Gain Reduction) - ПОДТВЕРЖДЕНО реальным
+    // трафиком iPad. Формат метра тот же, что и у обычного метра сигнала
+    // (1 байт, 0..255) - см. заметку у meterAddress().
+    fun compGrMeterAddress() = "/enPPCMeterMessage/$GROUP/enCompGRMeter"
+    fun gateGrMeterAddress() = "/enPPCMeterMessage/$GROUP/enExpGRMeter"
 
     // === Компрессор/лимитер - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным трафиком
     // (запись "33 fader compressor") ===
@@ -135,6 +149,25 @@ object Pro2Commands {
 
     fun setPhase(channelIndex: Int, inverted: Boolean): ByteArray =
         OscUtil.encode(phaseAddress(), listOf(channelIndex, if (inverted) 1 else 0))
+
+    // Слоуп (крутизна) фильтров пока не делаем - это отдельный "циклический"
+    // параметр (переключение по клику через список опций 6/12/18/24 дБ/окт),
+    // а не непрерывное значение - нужен отдельный UI-паттерн. Частота+вкл/выкл
+    // уже дают основную пользу.
+    fun setHpFilterIn(channelIndex: Int, on: Boolean): ByteArray =
+        OscUtil.encode(hpFilterInAddress(), listOf(channelIndex, if (on) 1 else 0))
+
+    fun setHpFilterFreq(channelIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(hpFilterFreqAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
+
+    fun setLpFilterIn(channelIndex: Int, on: Boolean): ByteArray =
+        OscUtil.encode(lpFilterInAddress(), listOf(channelIndex, if (on) 1 else 0))
+
+    fun setLpFilterFreq(channelIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(lpFilterFreqAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
+
+    fun setInputDelay(channelIndex: Int, level: Float): ByteArray =
+        OscUtil.encode(inputDelayAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
 
     fun setGateIn(channelIndex: Int, on: Boolean): ByteArray =
         OscUtil.encode(gateInAddress(), listOf(channelIndex, if (on) 1 else 0))
@@ -404,12 +437,23 @@ object Pro2Commands {
     // шин свой отдельный параметр (индекс шины зашит в имя, а не передаётся
     // как аргумент - как и предполагает список команд).
     fun subSendLevelAddress(auxBus: Int) = "/enPPCRotaryMessage/$GROUP/enSubSendLevel$auxBus"
+    // Отдельно от уровня посыла - ПОДТВЕРЖДЕНО реальным захватом. Включение
+    // самого посыла (независимо от того, что стоит на ползунке уровня) и
+    // pre/post-фейдер режим.
+    fun subSendEnableAddress(auxBus: Int) = "/enPPCSwitchMessage/$GROUP/enSubMixSendEnableIn$auxBus"
+    fun subSendPreFadeAddress(auxBus: Int) = "/enPPCSwitchMessage/$GROUP/enSubMixSendsPreFadeIn$auxBus"
 
     fun setSubSendLevel(channelIndex: Int, auxBus: Int, level: Float): ByteArray =
         OscUtil.encode(subSendLevelAddress(auxBus), listOf(channelIndex, level.coerceIn(0f, 1f)))
 
     fun getSubSendLevel(channelIndex: Int, auxBus: Int): ByteArray =
         OscUtil.encode(subSendLevelAddress(auxBus), listOf(channelIndex))
+
+    fun setSubSendEnable(channelIndex: Int, auxBus: Int, on: Boolean): ByteArray =
+        OscUtil.encode(subSendEnableAddress(auxBus), listOf(channelIndex, if (on) 1 else 0))
+
+    fun setSubSendPreFade(channelIndex: Int, auxBus: Int, pre: Boolean): ByteArray =
+        OscUtil.encode(subSendPreFadeAddress(auxBus), listOf(channelIndex, if (pre) 1 else 0))
 
     // === Живые обновления через подписку (обнаружено захватом трафика Mixtender 2) ===
     // Пульт не отвечает на обычный --get человекочитаемым путём. Вместо этого клиент

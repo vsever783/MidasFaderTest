@@ -41,7 +41,7 @@ import java.nio.ByteBuffer
  *     which ones are confirmed vs. best-effort based on the address list.
  */
 // === Живая подписка на пульт (см. Pro2Commands.batchSubscribe) ===
-enum class ParamKind { FADER, MUTE, SOLO, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, AUX_SEND, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, PAN, PHANTOM, PHASE, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN }
+enum class ParamKind { FADER, MUTE, SOLO, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, PAN, PHANTOM, PHASE, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER }
 // Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX ШИНЫ, MASTER - мастер намеренно
 // в конце (по просьбе - обычно с ним работают реже всего).
 enum class StripMode { CHANNELS, AUX_RETURNS, AUX_BUS, VCA, MASTER }
@@ -87,7 +87,18 @@ data class ChannelData(
     var gateRelease: Float = 0f,
     var gateTransient: Float = 0f,
     var gateFilterFreq: Float = 0f,
-    var gateFiltersInLocal: Boolean = false
+    var gateFiltersInLocal: Boolean = false,
+    var compGrMeter: Float = 0f,
+    var gateGrMeter: Float = 0f,
+    // HP/LP фильтры и задержка входа - ПОДТВЕРЖДЕНО реальным захватом.
+    var hpFilterInLocal: Boolean = false,
+    var hpFilterFreq: Float = 0f,
+    var lpFilterInLocal: Boolean = false,
+    var lpFilterFreq: Float = 0f,
+    var inputDelay: Float = 0f,
+    // Отдельно от уровня посыла - вкл/выкл и pre/post для каждой из 16 шин.
+    val auxSendEnable: BooleanArray = BooleanArray(16) { true },
+    val auxSendPreFade: BooleanArray = BooleanArray(16)
 )
 
 /** Состояние одного мастер-канала - НЕ подтверждено реальным захватом. */
@@ -1345,6 +1356,13 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_${i}_pan" to Triple(Pro2Commands.panAddress(), ParamKind.PAN, i),
                     "/h_${sid}_${i}_phantom" to Triple(Pro2Commands.phantomPowerAddress(), ParamKind.PHANTOM, i),
                     "/h_${sid}_${i}_phase" to Triple(Pro2Commands.phaseAddress(), ParamKind.PHASE, i),
+                    "/h_${sid}_${i}_hpin" to Triple(Pro2Commands.hpFilterInAddress(), ParamKind.HP_FILTER_IN, i),
+                    "/h_${sid}_${i}_hpfreq" to Triple(Pro2Commands.hpFilterFreqAddress(), ParamKind.HP_FILTER_FREQ, i),
+                    "/h_${sid}_${i}_lpin" to Triple(Pro2Commands.lpFilterInAddress(), ParamKind.LP_FILTER_IN, i),
+                    "/h_${sid}_${i}_lpfreq" to Triple(Pro2Commands.lpFilterFreqAddress(), ParamKind.LP_FILTER_FREQ, i),
+                    "/h_${sid}_${i}_delay" to Triple(Pro2Commands.inputDelayAddress(), ParamKind.INPUT_DELAY, i),
+                    "/h_${sid}_${i}_compgr" to Triple(Pro2Commands.compGrMeterAddress(), ParamKind.COMP_GR_METER, i),
+                    "/h_${sid}_${i}_gategr" to Triple(Pro2Commands.gateGrMeterAddress(), ParamKind.GATE_GR_METER, i),
                     "/h_${sid}_${i}_compflt" to Triple(Pro2Commands.compFiltersInAddress(), ParamKind.COMP_FILTERS_IN, i),
                     "/h_${sid}_${i}_compfltfreq" to Triple(Pro2Commands.compFilterFreqAddress(), ParamKind.COMP_FILTER_FREQ, i),
                 )
@@ -1471,6 +1489,20 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) { subscriptions[handle] = Subscription(channel, ParamKind.AUX_SEND, bus) }
                 try {
                     sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, Pro2Commands.subSendLevelAddress(bus), channel, channel, token))
+                } catch (e: Exception) {
+                    // не критично
+                }
+                val enHandle = "/h_${sid}_${channel}_senden$bus"
+                withContext(Dispatchers.Main) { subscriptions[enHandle] = Subscription(channel, ParamKind.AUX_SEND_ENABLE, bus) }
+                try {
+                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(enHandle, Pro2Commands.subSendEnableAddress(bus), channel, channel, token))
+                } catch (e: Exception) {
+                    // не критично
+                }
+                val preHandle = "/h_${sid}_${channel}_sendpre$bus"
+                withContext(Dispatchers.Main) { subscriptions[preHandle] = Subscription(channel, ParamKind.AUX_SEND_PREFADE, bus) }
+                try {
+                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(preHandle, Pro2Commands.subSendPreFadeAddress(bus), channel, channel, token))
                 } catch (e: Exception) {
                     // не критично
                 }
@@ -1699,6 +1731,73 @@ class MainActivity : AppCompatActivity() {
                 val on = blob.size >= 4 &&
                     ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
                 updatePhaseUi(sub.channel, on)
+            }
+            ParamKind.HP_FILTER_IN -> {
+                val on = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.channelData[sub.channel].hpFilterInLocal = on
+                if (openDetailChannel == sub.channel) {
+                    detailHpFilterInButton?.text = if (on) "HP FILTER ON" else "HP FILTER OFF"
+                    detailHpFilterInButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+                }
+            }
+            ParamKind.LP_FILTER_IN -> {
+                val on = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.channelData[sub.channel].lpFilterInLocal = on
+                if (openDetailChannel == sub.channel) {
+                    detailLpFilterInButton?.text = if (on) "LP FILTER ON" else "LP FILTER OFF"
+                    detailLpFilterInButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+                }
+            }
+            ParamKind.HP_FILTER_FREQ -> {
+                if (blob.size >= 4) {
+                    val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).float.coerceIn(0f, 1f)
+                    ConnectionHolder.channelData[sub.channel].hpFilterFreq = level
+                    if (openDetailChannel == sub.channel) detailHpFreqSeek?.progress = (level * 1000).toInt()
+                }
+            }
+            ParamKind.LP_FILTER_FREQ -> {
+                if (blob.size >= 4) {
+                    val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).float.coerceIn(0f, 1f)
+                    ConnectionHolder.channelData[sub.channel].lpFilterFreq = level
+                    if (openDetailChannel == sub.channel) detailLpFreqSeek?.progress = (level * 1000).toInt()
+                }
+            }
+            ParamKind.INPUT_DELAY -> {
+                if (blob.size >= 4) {
+                    val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).float.coerceIn(0f, 1f)
+                    ConnectionHolder.channelData[sub.channel].inputDelay = level
+                    if (openDetailChannel == sub.channel) detailDelaySeek?.progress = (level * 1000).toInt()
+                }
+            }
+            ParamKind.COMP_GR_METER -> {
+                if (blob.isNotEmpty()) {
+                    val level = ((blob[0].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
+                    ConnectionHolder.channelData[sub.channel].compGrMeter = level
+                    if (openDetailChannel == sub.channel) {
+                        detailCompDynViews?.grText?.text = "GR -%.1f".format(level * 20f)
+                    }
+                }
+            }
+            ParamKind.GATE_GR_METER -> {
+                if (blob.isNotEmpty()) {
+                    val level = ((blob[0].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
+                    ConnectionHolder.channelData[sub.channel].gateGrMeter = level
+                    if (openDetailChannel == sub.channel) {
+                        detailGateDynViews?.grText?.text = "GR -%.1f".format(level * 60f)
+                    }
+                }
+            }
+            ParamKind.AUX_SEND_ENABLE -> {
+                val on = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                if (sub.auxBus in 1..16) ConnectionHolder.channelData[sub.channel].auxSendEnable[sub.auxBus - 1] = on
+            }
+            ParamKind.AUX_SEND_PREFADE -> {
+                val on = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                if (sub.auxBus in 1..16) ConnectionHolder.channelData[sub.channel].auxSendPreFade[sub.auxBus - 1] = on
             }
             ParamKind.GATE_IN -> {
                 val on = blob.size >= 4 &&
@@ -1992,6 +2091,11 @@ class MainActivity : AppCompatActivity() {
     private var detailPanText: TextView? = null
     private var detailPhantomButton: Button? = null
     private var detailPhaseButton: Button? = null
+    private var detailHpFilterInButton: Button? = null
+    private var detailLpFilterInButton: Button? = null
+    private var detailHpFreqSeek: SeekBar? = null
+    private var detailLpFreqSeek: SeekBar? = null
+    private var detailDelaySeek: SeekBar? = null
 
     /** Общая структура для вкладок COMP и GATE - сетка ручек + график + IN/фильтр. */
     private data class DynamicsBlockViews(
@@ -2000,7 +2104,8 @@ class MainActivity : AppCompatActivity() {
         val knobViews: Map<ParamKind, Pair<RotaryKnobView, TextView>>,
         val filtersInButton: Button?,
         val thresholdKind: ParamKind,
-        val ratioOrRangeKind: ParamKind
+        val ratioOrRangeKind: ParamKind,
+        val grText: TextView
     )
     private var detailCompDynViews: DynamicsBlockViews? = null
     private var detailGateDynViews: DynamicsBlockViews? = null
@@ -2176,6 +2281,11 @@ class MainActivity : AppCompatActivity() {
             detailPhantomButton = null
             detailPhaseButton = null
             detailCompDynViews = null
+            detailHpFilterInButton = null
+            detailLpFilterInButton = null
+            detailHpFreqSeek = null
+            detailLpFreqSeek = null
+            detailDelaySeek = null
             detailGateDynViews = null
         }
 
@@ -2452,6 +2562,102 @@ class MainActivity : AppCompatActivity() {
             swatchRow.addView(swatch)
         }
 
+        // --- HP/LP фильтры и задержка входа - ПОДТВЕРЖДЕНО реальным захватом ---
+        val btnHp = view.findViewById<Button>(R.id.btnDetailHpFilterIn)
+        btnHp.backgroundTintList = null
+        btnHp.text = if (inputData.hpFilterInLocal) "HP FILTER ON" else "HP FILTER OFF"
+        btnHp.setBackgroundColor(Color.parseColor(if (inputData.hpFilterInLocal) "#ff9f0a" else "#3a3a3c"))
+        btnHp.setOnClickListener {
+            val newState = !ConnectionHolder.channelData[channel].hpFilterInLocal
+            ConnectionHolder.channelData[channel].hpFilterInLocal = newState
+            btnHp.text = if (newState) "HP FILTER ON" else "HP FILTER OFF"
+            btnHp.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+            sendRawAsync(Pro2Commands.setHpFilterIn(channel, newState))
+        }
+        detailHpFilterInButton = btnHp
+
+        val btnLp = view.findViewById<Button>(R.id.btnDetailLpFilterIn)
+        btnLp.backgroundTintList = null
+        btnLp.text = if (inputData.lpFilterInLocal) "LP FILTER ON" else "LP FILTER OFF"
+        btnLp.setBackgroundColor(Color.parseColor(if (inputData.lpFilterInLocal) "#ff9f0a" else "#3a3a3c"))
+        btnLp.setOnClickListener {
+            val newState = !ConnectionHolder.channelData[channel].lpFilterInLocal
+            ConnectionHolder.channelData[channel].lpFilterInLocal = newState
+            btnLp.text = if (newState) "LP FILTER ON" else "LP FILTER OFF"
+            btnLp.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+            sendRawAsync(Pro2Commands.setLpFilterIn(channel, newState))
+        }
+        detailLpFilterInButton = btnLp
+
+        val seekHpFreq = view.findViewById<SeekBar>(R.id.seekDetailHpFreq)
+        seekHpFreq.progress = (inputData.hpFilterFreq * 1000).toInt()
+        detailHpFreqSeek = seekHpFreq
+        seekHpFreq.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            var lastSend = 0L
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                val level = progress / 1000f
+                ConnectionHolder.channelData[channel].hpFilterFreq = level
+                val now = System.currentTimeMillis()
+                if (now - lastSend >= minSendIntervalMs) {
+                    lastSend = now
+                    sendRawAsync(Pro2Commands.setHpFilterFreq(channel, level))
+                }
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                val level = (sb?.progress ?: 0) / 1000f
+                ConnectionHolder.channelData[channel].hpFilterFreq = level
+                sendRawAsync(Pro2Commands.setHpFilterFreq(channel, level))
+            }
+        })
+
+        val seekLpFreq = view.findViewById<SeekBar>(R.id.seekDetailLpFreq)
+        seekLpFreq.progress = (inputData.lpFilterFreq * 1000).toInt()
+        detailLpFreqSeek = seekLpFreq
+        seekLpFreq.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            var lastSend = 0L
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                val level = progress / 1000f
+                ConnectionHolder.channelData[channel].lpFilterFreq = level
+                val now = System.currentTimeMillis()
+                if (now - lastSend >= minSendIntervalMs) {
+                    lastSend = now
+                    sendRawAsync(Pro2Commands.setLpFilterFreq(channel, level))
+                }
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                val level = (sb?.progress ?: 0) / 1000f
+                ConnectionHolder.channelData[channel].lpFilterFreq = level
+                sendRawAsync(Pro2Commands.setLpFilterFreq(channel, level))
+            }
+        })
+
+        val seekDelay = view.findViewById<SeekBar>(R.id.seekDetailDelay)
+        seekDelay.progress = (inputData.inputDelay * 1000).toInt()
+        detailDelaySeek = seekDelay
+        seekDelay.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            var lastSend = 0L
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                val level = progress / 1000f
+                ConnectionHolder.channelData[channel].inputDelay = level
+                val now = System.currentTimeMillis()
+                if (now - lastSend >= minSendIntervalMs) {
+                    lastSend = now
+                    sendRawAsync(Pro2Commands.setInputDelay(channel, level))
+                }
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                val level = (sb?.progress ?: 0) / 1000f
+                ConnectionHolder.channelData[channel].inputDelay = level
+                sendRawAsync(Pro2Commands.setInputDelay(channel, level))
+            }
+        })
+
         // --- Вкладка SENDS: 16 посылов, строится программно ---
         // НЕ подтверждено реальным захватом трафика - см. заметку в
         // Pro2Commands.kt про enSubSendLevel1..16.
@@ -2469,6 +2675,47 @@ class MainActivity : AppCompatActivity() {
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
                 textSize = 12f
             }
+            // Отдельно от уровня посыла - ПОДТВЕРЖДЕНО реальным захватом.
+            val toggleRow = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+            }
+            val btnEnable = Button(this).apply {
+                backgroundTintList = null
+                minHeight = 0
+                textSize = 10f
+                setPadding(16, 4, 16, 4)
+                text = if (data.auxSendEnable[bus - 1]) "EN" else "OFF"
+                setTextColor(Color.parseColor("#ffffff"))
+                setBackgroundColor(Color.parseColor(if (data.auxSendEnable[bus - 1]) "#ff9f0a" else "#3a3a3c"))
+                setOnClickListener {
+                    val newState = !ConnectionHolder.channelData[channel].auxSendEnable[bus - 1]
+                    ConnectionHolder.channelData[channel].auxSendEnable[bus - 1] = newState
+                    text = if (newState) "EN" else "OFF"
+                    setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+                    sendRawAsync(Pro2Commands.setSubSendEnable(channel, bus, newState))
+                }
+            }
+            val btnPreFade = Button(this).apply {
+                backgroundTintList = null
+                minHeight = 0
+                textSize = 10f
+                setPadding(16, 4, 16, 4)
+                text = if (data.auxSendPreFade[bus - 1]) "PRE" else "POST"
+                setTextColor(Color.parseColor("#ffffff"))
+                setBackgroundColor(Color.parseColor("#3a3a3c"))
+                setOnClickListener {
+                    val newState = !ConnectionHolder.channelData[channel].auxSendPreFade[bus - 1]
+                    ConnectionHolder.channelData[channel].auxSendPreFade[bus - 1] = newState
+                    text = if (newState) "PRE" else "POST"
+                    sendRawAsync(Pro2Commands.setSubSendPreFade(channel, bus, newState))
+                }
+            }
+            val preParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = 8 }
+            toggleRow.addView(btnEnable)
+            toggleRow.addView(btnPreFade, preParams)
             val seek = SeekBar(this).apply {
                 max = 1000
                 progress = (data.auxSends[bus - 1] * 1000).toInt()
@@ -2499,6 +2746,7 @@ class MainActivity : AppCompatActivity() {
                 }
             })
             row.addView(label)
+            row.addView(toggleRow)
             row.addView(seek)
             row.addView(valueText)
             sendsBlock.addView(row)
@@ -2687,7 +2935,14 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        val grText = TextView(this).apply {
+            text = "GR -0.0"
+            setTextColor(Color.parseColor("#8e8e93"))
+            textSize = 11f
+            setPadding(16, 0, 16, 0)
+        }
         header.addView(title)
+        header.addView(grText)
         header.addView(inButton)
         container.addView(header, android.widget.LinearLayout.LayoutParams(
             android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
@@ -2802,7 +3057,7 @@ class MainActivity : AppCompatActivity() {
         }
         container.addView(filtersInButton)
 
-        val views = DynamicsBlockViews(inButton, graph, knobViews, filtersInButton, thresholdKind, ratioOrRangeKind)
+        val views = DynamicsBlockViews(inButton, graph, knobViews, filtersInButton, thresholdKind, ratioOrRangeKind, grText)
         if (isGate) detailGateDynViews = views else detailCompDynViews = views
     }
 
@@ -3407,6 +3662,11 @@ class MainActivity : AppCompatActivity() {
             detailPhantomButton = null
             detailPhaseButton = null
             detailCompDynViews = null
+            detailHpFilterInButton = null
+            detailLpFilterInButton = null
+            detailHpFreqSeek = null
+            detailLpFreqSeek = null
+            detailDelaySeek = null
             detailGateDynViews = null
             return
         }

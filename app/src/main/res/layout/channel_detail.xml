@@ -253,6 +253,84 @@
                     android:layout_height="36dp"
                     android:orientation="horizontal" />
 
+                <!-- HP/LP фильтры и задержка входа - ПОДТВЕРЖДЕНО реальным
+                     захватом. Крутизна (slope) не реализована - отдельный
+                     циклический параметр, не непрерывное значение. -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="24dp">
+
+                    <Button
+                        android:id="@+id/btnDetailHpFilterIn"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="8dp"
+                        android:text="HP FILTER OFF"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#ffffff"
+                        android:backgroundTint="#3a3a3c" />
+
+                    <Button
+                        android:id="@+id/btnDetailLpFilterIn"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="LP FILTER OFF"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#ffffff"
+                        android:backgroundTint="#3a3a3c" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="HP FREQ"
+                    android:textColor="#ff9f0a"
+                    android:textStyle="bold"
+                    android:textSize="11sp"
+                    android:layout_marginTop="12dp" />
+                <SeekBar
+                    android:id="@+id/seekDetailHpFreq"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="1000"
+                    android:progress="0" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="LP FREQ"
+                    android:textColor="#ff9f0a"
+                    android:textStyle="bold"
+                    android:textSize="11sp"
+                    android:layout_marginTop="12dp" />
+                <SeekBar
+                    android:id="@+id/seekDetailLpFreq"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="1000"
+                    android:progress="1000" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="INPUT DELAY"
+                    android:textColor="#ff9f0a"
+                    android:textStyle="bold"
+                    android:textSize="11sp"
+                    android:layout_marginTop="12dp" />
+                <SeekBar
+                    android:id="@+id/seekDetailDelay"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="1000"
+                    android:progress="0" />
+
             </LinearLayout>
 
             <LinearLayout
