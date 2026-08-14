@@ -1642,8 +1642,9 @@ class MainActivity : AppCompatActivity() {
                     ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
                 ConnectionHolder.channelData[sub.channel].compFiltersInLocal = on
                 if (openDetailChannel == sub.channel) {
-                    detailCompFiltersInButton?.text = if (on) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
-                    detailCompFiltersInButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+                    val btn = detailCompDynViews?.filtersInButton
+                    btn?.text = if (on) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+                    btn?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
                 }
             }
             ParamKind.COMP_FILTER_FREQ -> {
@@ -1652,8 +1653,7 @@ class MainActivity : AppCompatActivity() {
                         .float.coerceIn(0f, 1f)
                     ConnectionHolder.channelData[sub.channel].compFilterFreq = level
                     if (openDetailChannel == sub.channel) {
-                        detailCompFilterFreqSeek?.progress = (level * 1000).toInt()
-                        detailCompFilterFreqText?.text = "%.2f".format(level)
+                        updateDynamicsKnobUi(detailCompDynViews, ParamKind.COMP_FILTER_FREQ, level)
                     }
                 }
             }
@@ -1986,77 +1986,61 @@ class MainActivity : AppCompatActivity() {
     )
     private data class EqBlockViews(val inButton: Button, val bands: Array<EqBandViews>)
     private var detailEqViews: EqBlockViews? = null
-    // Живые ссылки на виджеты вкладки INPUT/GATE, пока детальный экран
-    // открыт - для подкрутки от push (тот же паттерн, что и detailEqViews).
+    // Живые ссылки на виджеты вкладки INPUT, пока детальный экран открыт -
+    // для подкрутки от push (тот же паттерн, что и detailEqViews).
     private var detailPanSeek: SeekBar? = null
     private var detailPanText: TextView? = null
     private var detailPhantomButton: Button? = null
     private var detailPhaseButton: Button? = null
-    private var detailGateInButton: Button? = null
-    private var detailGateFiltersInButton: Button? = null
-    // Порядок соответствует makeRow() в buildGateBlock(): threshold, range,
-    // attack, hold, release, transient, filter freq.
-    private var detailGateParamViews: Array<Pair<SeekBar, TextView>?> = arrayOfNulls(7)
-    private var detailCompFilterFreqSeek: SeekBar? = null
-    private var detailCompFilterFreqText: TextView? = null
-    private var detailCompFiltersInButton: Button? = null
 
-    private data class CompSliderViews(
-        val ratio: SeekBar, val ratioText: TextView,
-        val attack: SeekBar, val attackText: TextView,
-        val release: SeekBar, val releaseText: TextView,
-        val threshold: SeekBar, val thresholdText: TextView,
-        val makeup: SeekBar, val makeupText: TextView
+    /** Общая структура для вкладок COMP и GATE - сетка ручек + график + IN/фильтр. */
+    private data class DynamicsBlockViews(
+        val inButton: Button,
+        val graphView: TransferCurveView,
+        val knobViews: Map<ParamKind, Pair<RotaryKnobView, TextView>>,
+        val filtersInButton: Button?,
+        val thresholdKind: ParamKind,
+        val ratioOrRangeKind: ParamKind
     )
+    private var detailCompDynViews: DynamicsBlockViews? = null
+    private var detailGateDynViews: DynamicsBlockViews? = null
 
     private data class ChannelDetailViews(
         val muteButton: Button,
         val soloButton: ToggleButton,
-        val compInButton: Button,
         val fader: SeekBar,
         val meterBar: android.view.View,
         val levelText: TextView,
-        val comp: CompSliderViews,
         val gainKnob: RotaryKnobView,
         val gainValueText: TextView
     )
 
     private fun updateCompParamUi(channel: Int, kind: ParamKind, level: Float) {
-        val ui = channels.getOrNull(channel) ?: return
+        val ui = channels.getOrNull(channel)
         val data = ConnectionHolder.channelData[channel]
         when (kind) {
-            ParamKind.COMP_RATIO -> { ui.compRatio = level; data.compRatio = level }
-            ParamKind.COMP_ATTACK -> { ui.compAttack = level; data.compAttack = level }
-            ParamKind.COMP_RELEASE -> { ui.compRelease = level; data.compRelease = level }
-            ParamKind.COMP_THRESHOLD -> { ui.compThreshold = level; data.compThreshold = level }
-            ParamKind.COMP_MAKEUP -> { ui.compMakeup = level; data.compMakeup = level }
+            ParamKind.COMP_RATIO -> { ui?.compRatio = level; data.compRatio = level }
+            ParamKind.COMP_ATTACK -> { ui?.compAttack = level; data.compAttack = level }
+            ParamKind.COMP_RELEASE -> { ui?.compRelease = level; data.compRelease = level }
+            ParamKind.COMP_THRESHOLD -> { ui?.compThreshold = level; data.compThreshold = level }
+            ParamKind.COMP_MAKEUP -> { ui?.compMakeup = level; data.compMakeup = level }
             else -> return
         }
         // Если детальный экран для этого канала сейчас открыт - подкручиваем
-        // ползунок вживую, чтобы он отражал изменения, сделанные прямо на пульте.
+        // ручку вживую, чтобы она отражала изменения, сделанные прямо на пульте.
         if (openDetailChannel == channel) {
-            val comp = detailViews?.comp ?: return
-            val (seek, text) = when (kind) {
-                ParamKind.COMP_RATIO -> comp.ratio to comp.ratioText
-                ParamKind.COMP_ATTACK -> comp.attack to comp.attackText
-                ParamKind.COMP_RELEASE -> comp.release to comp.releaseText
-                ParamKind.COMP_THRESHOLD -> comp.threshold to comp.thresholdText
-                ParamKind.COMP_MAKEUP -> comp.makeup to comp.makeupText
-                else -> return
-            }
-            seek.progress = (level * 1000).toInt()
-            text.text = "%.2f".format(level)
+            updateDynamicsKnobUi(detailCompDynViews, kind, level)
         }
     }
 
     private fun updateCompInUi(channel: Int, on: Boolean) {
         ConnectionHolder.channelData[channel].compInLocal = on
-        val ui = channels.getOrNull(channel) ?: return
-        ui.compInLocal = on
+        val ui = channels.getOrNull(channel)
+        ui?.compInLocal = on
         if (openDetailChannel == channel) {
-            val btn = detailViews?.compInButton ?: return
-            btn.text = if (on) "COMP ВКЛ" else "COMP ВЫКЛ"
-            btn.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+            val btn = detailCompDynViews?.inButton
+            btn?.text = if (on) "IN ●" else "IN ○"
+            btn?.setTextColor(if (on) Color.parseColor("#ff9f0a") else Color.parseColor("#8e8e93"))
         }
     }
 
@@ -2191,12 +2175,8 @@ class MainActivity : AppCompatActivity() {
             detailPanText = null
             detailPhantomButton = null
             detailPhaseButton = null
-            detailGateInButton = null
-            detailGateFiltersInButton = null
-            detailGateParamViews = arrayOfNulls(7)
-            detailCompFilterFreqSeek = null
-            detailCompFilterFreqText = null
-            detailCompFiltersInButton = null
+            detailCompDynViews = null
+            detailGateDynViews = null
         }
 
         // --- Постоянная панель mute/solo/фейдер/метр ---
@@ -2206,18 +2186,9 @@ class MainActivity : AppCompatActivity() {
         val detailFaderContainer = view.findViewById<android.widget.FrameLayout>(R.id.detailFaderContainer)
         val detailMeterBar = view.findViewById<android.view.View>(R.id.detailMeterBar)
         val detailLevelText = view.findViewById<TextView>(R.id.textDetailLevelValue)
-        val detailCompIn = view.findViewById<Button>(R.id.btnDetailCompIn)
 
         detailMute.backgroundTintList = null
         detailMute.stateListAnimator = null
-        detailCompIn.backgroundTintList = null
-        detailCompIn.stateListAnimator = null
-        detailCompIn.text = if (ui.compInLocal) "COMP ВКЛ" else "COMP ВЫКЛ"
-        detailCompIn.setBackgroundColor(Color.parseColor(if (ui.compInLocal) "#ff9f0a" else "#3a3a3c"))
-        detailCompIn.setOnClickListener {
-            updateCompInUi(channel, !ui.compInLocal)
-            sendCompIn(channel)
-        }
         detailSolo.backgroundTintList = null
         detailSolo.stateListAnimator = null
         detailMute.setBackgroundColor(Color.parseColor(if (ui.mutedLocal) "#ff3b30" else "#3a3a3c"))
@@ -2278,104 +2249,14 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
-        // --- Блок COMP ---
-        val ratio = view.findViewById<SeekBar>(R.id.seekCompRatio)
-        val ratioText = view.findViewById<TextView>(R.id.textCompRatioValue)
-        val attack = view.findViewById<SeekBar>(R.id.seekCompAttack)
-        val attackText = view.findViewById<TextView>(R.id.textCompAttackValue)
-        val release = view.findViewById<SeekBar>(R.id.seekCompRelease)
-        val releaseText = view.findViewById<TextView>(R.id.textCompReleaseValue)
-        val threshold = view.findViewById<SeekBar>(R.id.seekCompThreshold)
-        val thresholdText = view.findViewById<TextView>(R.id.textCompThresholdValue)
-        val makeup = view.findViewById<SeekBar>(R.id.seekCompMakeup)
-        val makeupText = view.findViewById<TextView>(R.id.textCompMakeupValue)
-
-        ratio.progress = (ui.compRatio * 1000).toInt()
-        ratioText.text = "%.2f".format(ui.compRatio)
-        attack.progress = (ui.compAttack * 1000).toInt()
-        attackText.text = "%.2f".format(ui.compAttack)
-        release.progress = (ui.compRelease * 1000).toInt()
-        releaseText.text = "%.2f".format(ui.compRelease)
-        threshold.progress = (ui.compThreshold * 1000).toInt()
-        thresholdText.text = "%.2f".format(ui.compThreshold)
-        makeup.progress = (ui.compMakeup * 1000).toInt()
-        makeupText.text = "%.2f".format(ui.compMakeup)
-
         openDetailChannel = channel
         val detailGainKnob = view.findViewById<RotaryKnobView>(R.id.knobDetailGain)
         val detailGainValue = view.findViewById<TextView>(R.id.textDetailGainValue)
 
         detailViews = ChannelDetailViews(
-            detailMute, detailSolo, detailCompIn, detailFader, detailMeterBar, detailLevelText,
-            CompSliderViews(
-                ratio, ratioText, attack, attackText, release, releaseText,
-                threshold, thresholdText, makeup, makeupText
-            ),
+            detailMute, detailSolo, detailFader, detailMeterBar, detailLevelText,
             detailGainKnob, detailGainValue
         )
-
-        fun persistComp(kind: ParamKind, level: Float) {
-            val data = ConnectionHolder.channelData[channel]
-            when (kind) {
-                ParamKind.COMP_RATIO -> data.compRatio = level
-                ParamKind.COMP_ATTACK -> data.compAttack = level
-                ParamKind.COMP_RELEASE -> data.compRelease = level
-                ParamKind.COMP_THRESHOLD -> data.compThreshold = level
-                ParamKind.COMP_MAKEUP -> data.compMakeup = level
-                ParamKind.COMP_FILTER_FREQ -> data.compFilterFreq = level
-                else -> {}
-            }
-        }
-        fun wire(seek: SeekBar, text: TextView, kind: ParamKind) {
-            var lastSend = 0L
-            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val level = progress / 1000f
-                    text.text = "%.2f".format(level)
-                    if (!fromUser) return
-                    persistComp(kind, level)
-                    val now = System.currentTimeMillis()
-                    if (now - lastSend >= minSendIntervalMs) {
-                        lastSend = now
-                        sendCompParam(channel, level, kind)
-                    }
-                }
-                override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) {
-                    val level = (sb?.progress ?: 0) / 1000f
-                    persistComp(kind, level)
-                    sendCompParam(channel, level, kind)
-                }
-            })
-        }
-        wire(ratio, ratioText, ParamKind.COMP_RATIO)
-        wire(attack, attackText, ParamKind.COMP_ATTACK)
-        wire(release, releaseText, ParamKind.COMP_RELEASE)
-        wire(threshold, thresholdText, ParamKind.COMP_THRESHOLD)
-        wire(makeup, makeupText, ParamKind.COMP_MAKEUP)
-
-        // Фильтр компрессора - ПОДТВЕРЖДЕНО тем же захватом, что и остальной компрессор.
-        val compFilterFreq = view.findViewById<SeekBar>(R.id.seekCompFilterFreq)
-        val compFilterFreqText = view.findViewById<TextView>(R.id.textCompFilterFreqValue)
-        val compData = ConnectionHolder.channelData[channel]
-        compFilterFreq.progress = (compData.compFilterFreq * 1000).toInt()
-        compFilterFreqText.text = "%.2f".format(compData.compFilterFreq)
-        wire(compFilterFreq, compFilterFreqText, ParamKind.COMP_FILTER_FREQ)
-        detailCompFilterFreqSeek = compFilterFreq
-        detailCompFilterFreqText = compFilterFreqText
-
-        val btnCompFiltersIn = view.findViewById<Button>(R.id.btnCompFiltersIn)
-        btnCompFiltersIn.backgroundTintList = null
-        btnCompFiltersIn.text = if (compData.compFiltersInLocal) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
-        btnCompFiltersIn.setBackgroundColor(Color.parseColor(if (compData.compFiltersInLocal) "#ff9f0a" else "#3a3a3c"))
-        btnCompFiltersIn.setOnClickListener {
-            val newState = !ConnectionHolder.channelData[channel].compFiltersInLocal
-            ConnectionHolder.channelData[channel].compFiltersInLocal = newState
-            btnCompFiltersIn.text = if (newState) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
-            btnCompFiltersIn.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
-            sendRawAsync(Pro2Commands.setCompFiltersIn(channel, newState))
-        }
-        detailCompFiltersInButton = btnCompFiltersIn
 
         // --- Вкладки INPUT / COMP / SENDS ---
         val tabInput = view.findViewById<Button>(R.id.btnTabInput)
@@ -2452,10 +2333,14 @@ class MainActivity : AppCompatActivity() {
         }
         showInput()
 
-        // --- Вкладка GATE: строится программно ---
+        // --- Вкладка COMP: строится программно (сетка ручек + график) ---
+        compBlock.removeAllViews()
+        buildDynamicsBlock(compBlock, channel, TransferCurveView.Mode.COMPRESSOR)
+
+        // --- Вкладка GATE: строится программно (сетка ручек + график) ---
         // ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным захватом трафика iPad.
         gateBlock.removeAllViews()
-        buildGateBlock(gateBlock, channel)
+        buildDynamicsBlock(gateBlock, channel, TransferCurveView.Mode.GATE)
 
         // --- Вкладка EQ: 4 полосы, строится программно ---
         // Подтверждено ОПИСАНИЯМИ в списке команд, но НЕ реальным захватом.
@@ -2751,107 +2636,185 @@ class MainActivity : AppCompatActivity() {
      * параметров и переключатель фильтров. ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным
      * захватом трафика iPad.
      */
-    private fun buildGateBlock(container: android.widget.LinearLayout, channel: Int) {
+    /**
+     * Строит содержимое вкладки COMP или GATE: заголовок с переключателем
+     * IN, график передаточной функции, сетка ручек (2 в ряд), и (если есть)
+     * переключатель фильтра снизу. Общая функция для обоих блоков - они
+     * структурно идентичны, отличаются только набором параметров и цветом.
+     */
+    private fun buildDynamicsBlock(
+        container: android.widget.LinearLayout,
+        channel: Int,
+        mode: TransferCurveView.Mode
+    ) {
         val data = ConnectionHolder.channelData[channel]
+        val isGate = mode == TransferCurveView.Mode.GATE
+        val accent = if (isGate) Color.parseColor("#34c759") else Color.parseColor("#ff9f0a")
+        val accentHex = if (isGate) "#34c759" else "#ff9f0a"
 
-        val gateInButton = Button(this).apply {
-            text = if (data.gateInLocal) "GATE ВКЛ" else "GATE ВЫКЛ"
-            setTextColor(Color.parseColor("#ffffff"))
-            setBackgroundColor(Color.parseColor(if (data.gateInLocal) "#ff9f0a" else "#3a3a3c"))
+        // --- Заголовок: название + переключатель IN (с цветной точкой) ---
+        val header = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+        }
+        val title = TextView(this).apply {
+            text = if (isGate) "GATE" else "COMPRESSOR"
+            setTextColor(accent)
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            textSize = 16f
+            layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val inLocal = if (isGate) data.gateInLocal else data.compInLocal
+        val inButton = Button(this).apply {
+            text = if (inLocal) "IN ●" else "IN ○"
+            backgroundTintList = null
+            setTextColor(if (inLocal) accent else Color.parseColor("#8e8e93"))
+            setBackgroundColor(Color.parseColor("#2c2c2e"))
             setOnClickListener {
-                val newState = !ConnectionHolder.channelData[channel].gateInLocal
-                ConnectionHolder.channelData[channel].gateInLocal = newState
-                text = if (newState) "GATE ВКЛ" else "GATE ВЫКЛ"
-                setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
-                sendGateIn(channel, newState)
+                val d = ConnectionHolder.channelData[channel]
+                if (isGate) {
+                    val newState = !d.gateInLocal
+                    d.gateInLocal = newState
+                    text = if (newState) "IN ●" else "IN ○"
+                    setTextColor(if (newState) accent else Color.parseColor("#8e8e93"))
+                    sendGateIn(channel, newState)
+                } else {
+                    val newState = !d.compInLocal
+                    d.compInLocal = newState
+                    text = if (newState) "IN ●" else "IN ○"
+                    setTextColor(if (newState) accent else Color.parseColor("#8e8e93"))
+                    sendRawAsync(Pro2Commands.setCompIn(channel))
+                }
             }
         }
-        container.addView(gateInButton, android.widget.LinearLayout.LayoutParams(
+        header.addView(title)
+        header.addView(inButton)
+        container.addView(header, android.widget.LinearLayout.LayoutParams(
             android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
             android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = 24 })
-        detailGateInButton = gateInButton
+        ).apply { bottomMargin = 12 })
 
-        fun makeRow(label: String, initial: Float, kind: ParamKind) {
-            val rowLabel = TextView(this).apply {
-                text = label
-                setTextColor(Color.parseColor("#ff9f0a"))
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                textSize = 12f
+        // --- График передаточной функции ---
+        val graph = TransferCurveView(this).apply {
+            this.mode = mode
+            accentColor = accent
+        }
+        val graphParams = android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+            (180 * resources.displayMetrics.density).toInt()
+        ).apply { bottomMargin = 20 }
+        container.addView(graph, graphParams)
+
+        // --- Сетка ручек (2 в ряд) ---
+        val paramList: List<Triple<String, ParamKind, Float>> = if (isGate) listOf(
+            Triple("THRESHOLD", ParamKind.GATE_THRESHOLD, data.gateThreshold),
+            Triple("RANGE", ParamKind.GATE_RANGE, data.gateRange),
+            Triple("ATTACK", ParamKind.GATE_ATTACK, data.gateAttack),
+            Triple("HOLD", ParamKind.GATE_HOLD, data.gateHold),
+            Triple("RELEASE", ParamKind.GATE_RELEASE, data.gateRelease),
+            Triple("TRANSIENT", ParamKind.GATE_TRANSIENT, data.gateTransient),
+            Triple("FILTER FREQ", ParamKind.GATE_FILTER_FREQ, data.gateFilterFreq)
+        ) else listOf(
+            Triple("THRESHOLD", ParamKind.COMP_THRESHOLD, data.compThreshold),
+            Triple("RATIO", ParamKind.COMP_RATIO, data.compRatio),
+            Triple("ATTACK", ParamKind.COMP_ATTACK, data.compAttack),
+            Triple("RELEASE", ParamKind.COMP_RELEASE, data.compRelease),
+            Triple("GAIN", ParamKind.COMP_MAKEUP, data.compMakeup),
+            Triple("FILTER FREQ", ParamKind.COMP_FILTER_FREQ, data.compFilterFreq)
+        )
+        val thresholdKind = if (isGate) ParamKind.GATE_THRESHOLD else ParamKind.COMP_THRESHOLD
+        val ratioOrRangeKind = if (isGate) ParamKind.GATE_RANGE else ParamKind.COMP_RATIO
+        graph.threshold = paramList.first { it.second == thresholdKind }.third
+        graph.ratioOrRange = paramList.first { it.second == ratioOrRangeKind }.third
+
+        val knobViews = mutableMapOf<ParamKind, Pair<RotaryKnobView, TextView>>()
+        var row: android.widget.LinearLayout? = null
+        for ((index, item) in paramList.withIndex()) {
+            val (label, kind, initial) = item
+            if (index % 2 == 0) {
+                row = android.widget.LinearLayout(this).apply {
+                    orientation = android.widget.LinearLayout.HORIZONTAL
+                }
+                container.addView(row, android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = 16 })
             }
-            val seek = SeekBar(this).apply { max = 1000; progress = (initial * 1000).toInt() }
-            val valueText = TextView(this).apply {
-                text = "%.2f".format(initial)
-                setTextColor(Color.parseColor("#aaaaaa"))
+            val cell = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val cellLabel = TextView(this).apply {
+                text = label
+                setTextColor(Color.parseColor("#8e8e93"))
                 textSize = 11f
             }
-            var lastSend = 0L
-            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val level = progress / 1000f
-                    valueText.text = "%.2f".format(level)
-                    if (!fromUser) return
-                    persistGate(channel, kind, level)
-                    val now = System.currentTimeMillis()
-                    if (now - lastSend >= minSendIntervalMs) {
-                        lastSend = now
-                        sendGateParam(channel, kind, level)
-                    }
-                }
-                override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) {
-                    val level = (sb?.progress ?: 0) / 1000f
-                    persistGate(channel, kind, level)
-                    sendGateParam(channel, kind, level)
-                }
-            })
-            val margin = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 16 }
-            container.addView(rowLabel)
-            container.addView(seek)
-            container.addView(valueText, margin)
-            val idx = when (kind) {
-                ParamKind.GATE_THRESHOLD -> 0
-                ParamKind.GATE_RANGE -> 1
-                ParamKind.GATE_ATTACK -> 2
-                ParamKind.GATE_HOLD -> 3
-                ParamKind.GATE_RELEASE -> 4
-                ParamKind.GATE_TRANSIENT -> 5
-                ParamKind.GATE_FILTER_FREQ -> 6
-                else -> -1
+            val knob = RotaryKnobView(this).apply {
+                value = initial
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    (72 * resources.displayMetrics.density).toInt(),
+                    (72 * resources.displayMetrics.density).toInt()
+                ).apply { topMargin = 6; bottomMargin = 6 }
             }
-            if (idx >= 0) detailGateParamViews[idx] = seek to valueText
+            val valueText = TextView(this).apply {
+                text = "%.2f".format(initial)
+                setTextColor(accent)
+                textSize = 12f
+            }
+            knob.onValueChanged = { v ->
+                valueText.text = "%.2f".format(v)
+                persistDynamicsParam(channel, kind, v)
+                if (kind == thresholdKind) graph.threshold = v
+                if (kind == ratioOrRangeKind) graph.ratioOrRange = v
+                sendDynamicsParam(channel, kind, v)
+            }
+            cell.addView(cellLabel)
+            cell.addView(knob)
+            cell.addView(valueText)
+            row?.addView(cell)
+            knobViews[kind] = knob to valueText
         }
 
-        makeRow("THRESHOLD", data.gateThreshold, ParamKind.GATE_THRESHOLD)
-        makeRow("RANGE", data.gateRange, ParamKind.GATE_RANGE)
-        makeRow("ATTACK", data.gateAttack, ParamKind.GATE_ATTACK)
-        makeRow("HOLD", data.gateHold, ParamKind.GATE_HOLD)
-        makeRow("RELEASE", data.gateRelease, ParamKind.GATE_RELEASE)
-        makeRow("TRANSIENT", data.gateTransient, ParamKind.GATE_TRANSIENT)
-        makeRow("FILTER FREQ", data.gateFilterFreq, ParamKind.GATE_FILTER_FREQ)
-
+        // --- Переключатель фильтра (есть и у gate, и у comp) ---
+        val filtersInLocal = if (isGate) data.gateFiltersInLocal else data.compFiltersInLocal
         val filtersInButton = Button(this).apply {
-            text = if (data.gateFiltersInLocal) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+            backgroundTintList = null
+            text = if (filtersInLocal) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
             setTextColor(Color.parseColor("#ffffff"))
-            setBackgroundColor(Color.parseColor(if (data.gateFiltersInLocal) "#ff9f0a" else "#3a3a3c"))
+            setBackgroundColor(Color.parseColor(if (filtersInLocal) accentHex else "#3a3a3c"))
             setOnClickListener {
-                val newState = !ConnectionHolder.channelData[channel].gateFiltersInLocal
-                ConnectionHolder.channelData[channel].gateFiltersInLocal = newState
-                text = if (newState) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
-                setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
-                sendGateFiltersIn(channel, newState)
+                val d = ConnectionHolder.channelData[channel]
+                if (isGate) {
+                    val newState = !d.gateFiltersInLocal
+                    d.gateFiltersInLocal = newState
+                    text = if (newState) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+                    setBackgroundColor(Color.parseColor(if (newState) accentHex else "#3a3a3c"))
+                    sendGateFiltersIn(channel, newState)
+                } else {
+                    val newState = !d.compFiltersInLocal
+                    d.compFiltersInLocal = newState
+                    text = if (newState) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+                    setBackgroundColor(Color.parseColor(if (newState) accentHex else "#3a3a3c"))
+                    sendRawAsync(Pro2Commands.setCompFiltersIn(channel, newState))
+                }
             }
         }
         container.addView(filtersInButton)
-        detailGateFiltersInButton = filtersInButton
+
+        val views = DynamicsBlockViews(inButton, graph, knobViews, filtersInButton, thresholdKind, ratioOrRangeKind)
+        if (isGate) detailGateDynViews = views else detailCompDynViews = views
     }
 
-    private fun persistGate(channel: Int, kind: ParamKind, level: Float) {
+    private fun persistDynamicsParam(channel: Int, kind: ParamKind, level: Float) {
         val data = ConnectionHolder.channelData[channel]
         when (kind) {
+            ParamKind.COMP_RATIO -> data.compRatio = level
+            ParamKind.COMP_ATTACK -> data.compAttack = level
+            ParamKind.COMP_RELEASE -> data.compRelease = level
+            ParamKind.COMP_THRESHOLD -> data.compThreshold = level
+            ParamKind.COMP_MAKEUP -> data.compMakeup = level
+            ParamKind.COMP_FILTER_FREQ -> data.compFilterFreq = level
             ParamKind.GATE_THRESHOLD -> data.gateThreshold = level
             ParamKind.GATE_RANGE -> data.gateRange = level
             ParamKind.GATE_ATTACK -> data.gateAttack = level
@@ -2861,6 +2824,26 @@ class MainActivity : AppCompatActivity() {
             ParamKind.GATE_FILTER_FREQ -> data.gateFilterFreq = level
             else -> {}
         }
+    }
+
+    private fun sendDynamicsParam(channel: Int, kind: ParamKind, level: Float) {
+        val packet = when (kind) {
+            ParamKind.COMP_RATIO -> Pro2Commands.setCompRatio(channel, level)
+            ParamKind.COMP_ATTACK -> Pro2Commands.setCompAttack(channel, level)
+            ParamKind.COMP_RELEASE -> Pro2Commands.setCompRelease(channel, level)
+            ParamKind.COMP_THRESHOLD -> Pro2Commands.setCompThreshold(channel, level)
+            ParamKind.COMP_MAKEUP -> Pro2Commands.setCompMakeupGain(channel, level)
+            ParamKind.COMP_FILTER_FREQ -> Pro2Commands.setCompFilterFreq(channel, level)
+            ParamKind.GATE_THRESHOLD -> Pro2Commands.setGateThreshold(channel, level)
+            ParamKind.GATE_RANGE -> Pro2Commands.setGateRange(channel, level)
+            ParamKind.GATE_ATTACK -> Pro2Commands.setGateAttack(channel, level)
+            ParamKind.GATE_HOLD -> Pro2Commands.setGateHold(channel, level)
+            ParamKind.GATE_RELEASE -> Pro2Commands.setGateRelease(channel, level)
+            ParamKind.GATE_TRANSIENT -> Pro2Commands.setGateTransient(channel, level)
+            ParamKind.GATE_FILTER_FREQ -> Pro2Commands.setGateFilterFreq(channel, level)
+            else -> return
+        }
+        sendRawAsync(packet)
     }
 
     private fun panLabelFor(v: Float): String = when {
@@ -2890,38 +2873,36 @@ class MainActivity : AppCompatActivity() {
         detailPhaseButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
     }
 
+    /** Общее обновление живого виджета сетки (используется и для COMP, и для GATE). */
+    private fun updateDynamicsKnobUi(views: DynamicsBlockViews?, kind: ParamKind, level: Float) {
+        val pair = views?.knobViews?.get(kind) ?: return
+        pair.first.value = level
+        pair.second.text = "%.2f".format(level)
+        if (kind == views.thresholdKind) views.graphView.threshold = level
+        if (kind == views.ratioOrRangeKind) views.graphView.ratioOrRange = level
+    }
+
     private fun updateGateInUi(channel: Int, on: Boolean) {
         ConnectionHolder.channelData[channel].gateInLocal = on
         if (openDetailChannel != channel) return
-        detailGateInButton?.text = if (on) "GATE ВКЛ" else "GATE ВЫКЛ"
-        detailGateInButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+        val views = detailGateDynViews ?: return
+        views.inButton.text = if (on) "IN ●" else "IN ○"
+        views.inButton.setTextColor(if (on) Color.parseColor("#34c759") else Color.parseColor("#8e8e93"))
     }
 
     private fun updateGateFiltersInUi(channel: Int, on: Boolean) {
         ConnectionHolder.channelData[channel].gateFiltersInLocal = on
         if (openDetailChannel != channel) return
-        detailGateFiltersInButton?.text = if (on) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
-        detailGateFiltersInButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+        val views = detailGateDynViews ?: return
+        views.filtersInButton?.text = if (on) "ФИЛЬТР ВКЛ" else "ФИЛЬТР ВЫКЛ"
+        views.filtersInButton?.setBackgroundColor(Color.parseColor(if (on) "#34c759" else "#3a3a3c"))
     }
 
     private fun updateGateParamUi(channel: Int, kind: ParamKind, level: Float) {
-        persistGate(channel, kind, level)
+        persistDynamicsParam(channel, kind, level)
         if (openDetailChannel != channel) return
-        val idx = when (kind) {
-            ParamKind.GATE_THRESHOLD -> 0
-            ParamKind.GATE_RANGE -> 1
-            ParamKind.GATE_ATTACK -> 2
-            ParamKind.GATE_HOLD -> 3
-            ParamKind.GATE_RELEASE -> 4
-            ParamKind.GATE_TRANSIENT -> 5
-            ParamKind.GATE_FILTER_FREQ -> 6
-            else -> return
-        }
-        val pair = detailGateParamViews.getOrNull(idx) ?: return
-        pair.first.progress = (level * 1000).toInt()
-        pair.second.text = "%.2f".format(level)
+        updateDynamicsKnobUi(detailGateDynViews, kind, level)
     }
-
 
     private fun updateFaderUi(channel: Int, level: Float) {
         val ui = channels.getOrNull(channel)
@@ -3386,12 +3367,8 @@ class MainActivity : AppCompatActivity() {
             detailPanText = null
             detailPhantomButton = null
             detailPhaseButton = null
-            detailGateInButton = null
-            detailGateFiltersInButton = null
-            detailGateParamViews = arrayOfNulls(7)
-            detailCompFilterFreqSeek = null
-            detailCompFilterFreqText = null
-            detailCompFiltersInButton = null
+            detailCompDynViews = null
+            detailGateDynViews = null
             return
         }
         if (appMode == MODE_MONITOR && monitorSelectedBus >= 0) {
