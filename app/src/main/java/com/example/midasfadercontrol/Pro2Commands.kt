@@ -59,6 +59,9 @@ object Pro2Commands {
     fun faderAddress() = "/enPPCFaderMessage/$GROUP/enFaderLevel"
     fun muteAddress() = "/enPPCSwitchMessage/$GROUP/enMuteStatus"
     fun soloAddress() = "/enPPCSwitchMessage/$GROUP/enFaderSolo"
+    // Вторая шина solo - ПОДТВЕРЖДЕНО реальным трафиком (есть даже у
+    // обычных каналов, не только у мастера/aux/шин).
+    fun soloBAddress() = "/enPPCSwitchMessage/$GROUP/enFaderSoloB"
     // ПОДТВЕРЖДЕНО реальным трафиком Mixtender 2 (перехват "TRIM" ручки на канале 32):
     // адрес enInputGain НЕ используется приложением для этой ручки вообще -
     // реально используется enMicSplitStepGain. Обозначение в JSON-файле muffeeee
@@ -113,6 +116,10 @@ object Pro2Commands {
     // (1 байт, 0..255) - см. заметку у meterAddress().
     fun compGrMeterAddress() = "/enPPCMeterMessage/$GROUP/enCompGRMeter"
     fun gateGrMeterAddress() = "/enPPCMeterMessage/$GROUP/enExpGRMeter"
+    // Detector-метры - входной сигнал ДО обработки (в отличие от GR -
+    // снижение усиления). ПОДТВЕРЖДЕНО реальным трафиком iPad.
+    fun compDetMeterAddress() = "/enPPCMeterMessage/$GROUP/enCompDetMeter"
+    fun gateDetMeterAddress() = "/enPPCMeterMessage/$GROUP/enGateDetMeter"
 
     // === Компрессор/лимитер - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным трафиком
     // (запись "33 fader compressor") ===
@@ -136,6 +143,9 @@ object Pro2Commands {
 
     fun setSolo(channelIndex: Int, soloed: Boolean): ByteArray =
         OscUtil.encode(soloAddress(), listOf(channelIndex, if (soloed) 1 else 0))
+
+    fun setSoloB(channelIndex: Int, soloed: Boolean): ByteArray =
+        OscUtil.encode(soloBAddress(), listOf(channelIndex, if (soloed) 1 else 0))
 
     fun setGain(channelIndex: Int, level: Float): ByteArray =
         OscUtil.encode(gainAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
@@ -294,6 +304,15 @@ object Pro2Commands {
     fun eqFreqAddress(band: EqBand) = "/enPPCRotaryMessage/$GROUP/enPEQFrequency${eqBandSuffix(band)}"
     fun eqGainAddress(band: EqBand) = "/enPPCRotaryMessage/$GROUP/enPEQGain${eqBandSuffix(band)}"
     fun eqWidthAddress(band: EqBand) = "/enPPCRotaryMessage/$GROUP/enPEQWidth${eqBandSuffix(band)}"
+    // Форма полосы (shelf/bell) - ТОЛЬКО у BASS и TREBLE (у средних полос
+    // LOW_MID/MID_HIGH её нет - они всегда "колокол"). ПОДТВЕРЖДЕНО
+    // реальным трафиком iPad.
+    fun eqShapeAddress(band: EqBand): String {
+        require(band == EqBand.BASS || band == EqBand.TREBLE) {
+            "Форма есть только у BASS и TREBLE"
+        }
+        return "/enPPCIntegerMessage/$GROUP/enPEQ${eqBandSuffix(band)}Shape"
+    }
 
     fun setEqIn(channelIndex: Int): ByteArray =
         OscUtil.encode(eqInAddress(), listOf(channelIndex, 1))
@@ -309,6 +328,9 @@ object Pro2Commands {
 
     fun setEqWidth(channelIndex: Int, band: EqBand, level: Float): ByteArray =
         OscUtil.encode(eqWidthAddress(band), listOf(channelIndex, level.coerceIn(0f, 1f)))
+
+    fun setEqShape(channelIndex: Int, band: EqBand, isShelf: Boolean): ByteArray =
+        OscUtil.encode(eqShapeAddress(band), listOf(channelIndex, if (isShelf) 1 else 0))
 
     fun getEqIn(channelIndex: Int): ByteArray =
         OscUtil.encode(eqInAddress(), listOf(channelIndex))
@@ -334,6 +356,7 @@ object Pro2Commands {
     // returns/aux-шинам, у которых тоже enFaderMute).
     fun masterMuteAddress() = "/enPPCSwitchMessage/$MASTER_GROUP/enFaderMute"
     fun masterSoloAddress() = "/enPPCSwitchMessage/$MASTER_GROUP/enFaderSolo"
+    fun masterSoloBAddress() = "/enPPCSwitchMessage/$MASTER_GROUP/enFaderSoloB"
     fun masterMeterAddress() = "/enPPCMeterMessage/$MASTER_GROUP/enMeter"
     fun masterNameAddress() = "/enPPCStringMessage/$MASTER_GROUP/enPathname"
 
@@ -345,6 +368,9 @@ object Pro2Commands {
 
     fun setMasterSolo(masterIndex: Int, soloed: Boolean): ByteArray =
         OscUtil.encode(masterSoloAddress(), listOf(masterIndex, if (soloed) 1 else 0))
+
+    fun setMasterSoloB(masterIndex: Int, soloed: Boolean): ByteArray =
+        OscUtil.encode(masterSoloBAddress(), listOf(masterIndex, if (soloed) 1 else 0))
 
     fun getMasterFader(masterIndex: Int): ByteArray =
         OscUtil.encode(masterFaderAddress(), listOf(masterIndex))
@@ -362,8 +388,13 @@ object Pro2Commands {
     fun auxReturnFaderAddress() = "/enPPCRotaryMessage/$AUX_RETURN_GROUP/enFaderLevel"
     fun auxReturnMuteAddress() = "/enPPCSwitchMessage/$AUX_RETURN_GROUP/enFaderMute"
     fun auxReturnSoloAddress() = "/enPPCSwitchMessage/$AUX_RETURN_GROUP/enFaderSolo"
+    fun auxReturnSoloBAddress() = "/enPPCSwitchMessage/$AUX_RETURN_GROUP/enFaderSoloB"
     fun auxReturnNameAddress() = "/enPPCStringMessage/$AUX_RETURN_GROUP/enPathname"
+    fun auxReturnColourAddress() = "/enPPCIntegerMessage/$AUX_RETURN_GROUP/enChannelColour"
     fun auxReturnMeterAddress() = "/enPPCMeterMessage/$AUX_RETURN_GROUP/enMeter"
+
+    fun setAuxReturnColour(auxIndex: Int, argbColor: Int): ByteArray =
+        OscUtil.encode(auxReturnColourAddress(), listOf(auxIndex, argbColor))
 
     fun setAuxReturnFader(auxIndex: Int, level: Float): ByteArray =
         OscUtil.encode(auxReturnFaderAddress(), listOf(auxIndex, level.coerceIn(0f, 1f)))
@@ -373,6 +404,9 @@ object Pro2Commands {
 
     fun setAuxReturnSolo(auxIndex: Int, soloed: Boolean): ByteArray =
         OscUtil.encode(auxReturnSoloAddress(), listOf(auxIndex, if (soloed) 1 else 0))
+
+    fun setAuxReturnSoloB(auxIndex: Int, soloed: Boolean): ByteArray =
+        OscUtil.encode(auxReturnSoloBAddress(), listOf(auxIndex, if (soloed) 1 else 0))
 
     fun getAuxReturnFader(auxIndex: Int): ByteArray =
         OscUtil.encode(auxReturnFaderAddress(), listOf(auxIndex))
@@ -391,6 +425,7 @@ object Pro2Commands {
     fun auxBusFaderAddress() = "/enPPCFaderMessage/$AUX_BUS_GROUP/enFaderLevel"
     fun auxBusMuteAddress() = "/enPPCSwitchMessage/$AUX_BUS_GROUP/enFaderMute"
     fun auxBusSoloAddress() = "/enPPCSwitchMessage/$AUX_BUS_GROUP/enFaderSolo"
+    fun auxBusSoloBAddress() = "/enPPCSwitchMessage/$AUX_BUS_GROUP/enFaderSoloB"
     fun auxBusNameAddress() = "/enPPCStringMessage/$AUX_BUS_GROUP/enPathname"
     // Подтверждено реальным трафиком iPad.
     fun auxBusColourAddress() = "/enPPCIntegerMessage/$AUX_BUS_GROUP/enChannelColour"
@@ -404,6 +439,9 @@ object Pro2Commands {
 
     fun setAuxBusSolo(busIndex: Int, soloed: Boolean): ByteArray =
         OscUtil.encode(auxBusSoloAddress(), listOf(busIndex, if (soloed) 1 else 0))
+
+    fun setAuxBusSoloB(busIndex: Int, soloed: Boolean): ByteArray =
+        OscUtil.encode(auxBusSoloBAddress(), listOf(busIndex, if (soloed) 1 else 0))
 
     fun getAuxBusFader(busIndex: Int): ByteArray =
         OscUtil.encode(auxBusFaderAddress(), listOf(busIndex))

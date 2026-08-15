@@ -41,7 +41,7 @@ import java.nio.ByteBuffer
  *     which ones are confirmed vs. best-effort based on the address list.
  */
 // === Живая подписка на пульт (см. Pro2Commands.batchSubscribe) ===
-enum class ParamKind { FADER, MUTE, SOLO, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, PAN, PHANTOM, PHASE, GAIN_TRIM, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER }
+enum class ParamKind { FADER, MUTE, SOLO, SOLO_B, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, COMP_DET_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, EQ_SHAPE_BASS, EQ_SHAPE_TREBLE, PAN, PHANTOM, PHASE, GAIN_TRIM, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER, GATE_DET_METER }
 // Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX ШИНЫ, MASTER - мастер намеренно
 // в конце (по просьбе - обычно с ним работают реже всего).
 enum class StripMode { CHANNELS, AUX_RETURNS, AUX_BUS, VCA, MASTER }
@@ -94,6 +94,11 @@ data class ChannelData(
     var gateFiltersInLocal: Boolean = false,
     var compGrMeter: Float = 0f,
     var gateGrMeter: Float = 0f,
+    var compDetMeter: Float = 0f,
+    var gateDetMeter: Float = 0f,
+    var soloBLocal: Boolean = false,
+    var eqBassShelf: Boolean = false,
+    var eqTrebleShelf: Boolean = false,
     // HP/LP фильтры и задержка входа - ПОДТВЕРЖДЕНО реальным захватом.
     var hpFilterInLocal: Boolean = false,
     var hpFilterFreq: Float = 0f,
@@ -109,14 +114,17 @@ data class ChannelData(
 data class MasterData(
     var fader: Float = 0f,
     var mutedLocal: Boolean = false,
-    var name: String = ""
+    var name: String = "",
+    var soloBLocal: Boolean = false
 )
 
 /** Состояние одного aux return - НЕ подтверждено реальным захватом. */
 data class AuxReturnData(
     var fader: Float = 0f,
     var mutedLocal: Boolean = false,
-    var name: String = ""
+    var name: String = "",
+    var colourArgb: Int? = null,
+    var soloBLocal: Boolean = false
 )
 
 /** Состояние одной aux-шины (собственный уровень шины, не посыл с канала). */
@@ -124,13 +132,15 @@ data class AuxBusData(
     var fader: Float = 0f,
     var mutedLocal: Boolean = false,
     var name: String = "",
-    var colourArgb: Int? = null
+    var colourArgb: Int? = null,
+    var soloBLocal: Boolean = false
 )
 
 data class VcaData(
     var fader: Float = 0f,
     var mutedLocal: Boolean = false,
-    var name: String = ""
+    var name: String = "",
+    var colourArgb: Int? = null
 )
 
 /**
@@ -850,6 +860,7 @@ class MainActivity : AppCompatActivity() {
         val levelText: TextView,
         val muteButton: Button,
         val soloButton: ToggleButton,
+        val soloBButton: ToggleButton,
         val meterBar: android.view.View,
         var mutedLocal: Boolean = false,
         var suppressEvents: Boolean = false,
@@ -871,9 +882,12 @@ class MainActivity : AppCompatActivity() {
         label: String,
         initialFader: Float,
         initialMuted: Boolean,
+        initialSoloB: Boolean,
         onFader: (Float) -> Unit,
         onMute: (Boolean) -> Unit,
-        onSolo: (Boolean) -> Unit
+        onSolo: (Boolean) -> Unit,
+        onSoloB: (Boolean) -> Unit,
+        showSoloB: Boolean = true
     ): SimpleStripUi {
         val inflater = LayoutInflater.from(this)
         val strip = inflater.inflate(R.layout.channel_strip, container, false)
@@ -884,6 +898,7 @@ class MainActivity : AppCompatActivity() {
         val levelText = strip.findViewById<TextView>(R.id.textLevelValue)
         val muteButton = strip.findViewById<Button>(R.id.btnMute)
         val soloButton = strip.findViewById<ToggleButton>(R.id.btnSolo)
+        val soloBButton = strip.findViewById<ToggleButton>(R.id.btnSoloB)
         val meterBar = strip.findViewById<android.view.View>(R.id.meterBar)
         val headerView = strip.findViewById<android.view.View>(R.id.channelHeader)
 
@@ -897,7 +912,25 @@ class MainActivity : AppCompatActivity() {
         muteButton.setBackgroundColor(Color.parseColor("#3a3a3c"))
         soloButton.setBackgroundColor(Color.parseColor("#3a3a3c"))
 
-        val ui = SimpleStripUi(strip, labelView, headerView, fader, levelText, muteButton, soloButton, meterBar)
+        // Вторая шина solo - ПОДТВЕРЖДЕНО реальным захватом. Только для
+        // мастера/aux returns/aux-шин (у обычных 56 каналов остаётся
+        // скрытой - там Solo B в детальном экране).
+        soloBButton.visibility = if (showSoloB) android.view.View.VISIBLE else android.view.View.GONE
+        // Когда кнопок solo две (мастер/aux returns/aux-шины) - "SOLO" не
+        // помещается рядом с "B", переименовываем в короткие A/B, чтобы
+        // сэкономить место. Там, где кнопка одна (обычные каналы, VCA) -
+        // остаётся полное "SOLO" (задаётся в самом XML по умолчанию).
+        if (showSoloB) {
+            soloButton.textOn = "A"
+            soloButton.textOff = "A"
+            soloButton.text = "A"
+        }
+        soloBButton.backgroundTintList = null
+        soloBButton.stateListAnimator = null
+        soloBButton.setBackgroundColor(Color.parseColor(if (initialSoloB) "#ff9f0a" else "#3a3a3c"))
+        soloBButton.isChecked = initialSoloB
+
+        val ui = SimpleStripUi(strip, labelView, headerView, fader, levelText, muteButton, soloButton, soloBButton, meterBar)
 
         faderContainer.viewTreeObserver.addOnGlobalLayoutListener(
             object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
@@ -944,6 +977,11 @@ class MainActivity : AppCompatActivity() {
             soloButton.setBackgroundColor(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
             onSolo(isChecked)
         }
+        soloBButton.setOnCheckedChangeListener { _, isChecked ->
+            if (ui.suppressEvents) return@setOnCheckedChangeListener
+            soloBButton.setBackgroundColor(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
+            onSoloB(isChecked)
+        }
 
         // Восстановление после поворота экрана - сразу подтягиваем последние
         // известные значения, не дожидаясь нового push.
@@ -966,10 +1004,11 @@ class MainActivity : AppCompatActivity() {
         for (m in 0 until 3) {
             val data = ConnectionHolder.masterData[m]
             val ui = buildSimpleStrip(
-                container, "M ${m + 1}", data.fader, data.mutedLocal,
+                container, "M ${m + 1}", data.fader, data.mutedLocal, data.soloBLocal,
                 onFader = { level -> ConnectionHolder.masterData[m].fader = level; sendMasterFader(m, level) },
                 onMute = { muted -> ConnectionHolder.masterData[m].mutedLocal = muted; sendMasterMute(m, true) },
-                onSolo = { soloed -> sendMasterSolo(m, soloed) }
+                onSolo = { soloed -> sendMasterSolo(m, soloed) },
+                onSoloB = { soloed -> ConnectionHolder.masterData[m].soloBLocal = soloed; sendRawAsync(Pro2Commands.setMasterSoloB(m, soloed)) }
             )
             masterStrips.add(ui)
         }
@@ -983,10 +1022,11 @@ class MainActivity : AppCompatActivity() {
         for (a in 0 until 8) {
             val data = ConnectionHolder.auxReturnData[a]
             val ui = buildSimpleStrip(
-                container, "AUX ${a + 1}", data.fader, data.mutedLocal,
+                container, "AUX ${a + 1}", data.fader, data.mutedLocal, data.soloBLocal,
                 onFader = { level -> ConnectionHolder.auxReturnData[a].fader = level; sendAuxReturnFader(a, level) },
                 onMute = { muted -> ConnectionHolder.auxReturnData[a].mutedLocal = muted; sendAuxReturnMute(a, true) },
-                onSolo = { soloed -> sendAuxReturnSolo(a, soloed) }
+                onSolo = { soloed -> sendAuxReturnSolo(a, soloed) },
+                onSoloB = { soloed -> ConnectionHolder.auxReturnData[a].soloBLocal = soloed; sendRawAsync(Pro2Commands.setAuxReturnSoloB(a, soloed)) }
             )
             auxStrips.add(ui)
         }
@@ -1000,10 +1040,11 @@ class MainActivity : AppCompatActivity() {
         for (b in 0 until 16) {
             val data = ConnectionHolder.auxBusData[b]
             val ui = buildSimpleStrip(
-                container, "BUS ${b + 1}", data.fader, data.mutedLocal,
+                container, "BUS ${b + 1}", data.fader, data.mutedLocal, data.soloBLocal,
                 onFader = { level -> ConnectionHolder.auxBusData[b].fader = level; sendAuxBusFader(b, level) },
                 onMute = { muted -> ConnectionHolder.auxBusData[b].mutedLocal = muted; sendAuxBusMute(b, true) },
-                onSolo = { soloed -> sendAuxBusSolo(b, soloed) }
+                onSolo = { soloed -> sendAuxBusSolo(b, soloed) },
+                onSoloB = { soloed -> ConnectionHolder.auxBusData[b].soloBLocal = soloed; sendRawAsync(Pro2Commands.setAuxBusSoloB(b, soloed)) }
             )
             auxBusStrips.add(ui)
         }
@@ -1017,10 +1058,12 @@ class MainActivity : AppCompatActivity() {
         for (v in 0 until 8) {
             val data = ConnectionHolder.vcaData[v]
             val ui = buildSimpleStrip(
-                container, "VCA ${v + 1}", data.fader, data.mutedLocal,
+                container, "VCA ${v + 1}", data.fader, data.mutedLocal, initialSoloB = false,
                 onFader = { level -> ConnectionHolder.vcaData[v].fader = level; sendVcaFader(v, level) },
                 onMute = { muted -> ConnectionHolder.vcaData[v].mutedLocal = muted; sendVcaMute(v, true) },
-                onSolo = { soloed -> sendVcaSolo(v, soloed) }
+                onSolo = { soloed -> sendVcaSolo(v, soloed) },
+                onSoloB = { /* Solo B у VCA НЕ подтверждено реальным захватом - кнопка скрыта. */ },
+                showSoloB = false
             )
             vcaStrips.add(ui)
         }
@@ -1347,6 +1390,7 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_${i}_fader" to Triple(Pro2Commands.faderAddress(), ParamKind.FADER, i),
                     "/h_${sid}_${i}_mute" to Triple(Pro2Commands.muteAddress(), ParamKind.MUTE, i),
                     "/h_${sid}_${i}_solo" to Triple(Pro2Commands.soloAddress(), ParamKind.SOLO, i),
+                    "/h_${sid}_${i}_solob" to Triple(Pro2Commands.soloBAddress(), ParamKind.SOLO_B, i),
                     "/h_${sid}_${i}_gain" to Triple(Pro2Commands.gainAddress(), ParamKind.GAIN, i),
                     "/h_${sid}_${i}_gaintrim" to Triple(Pro2Commands.gainTrimAddress(), ParamKind.GAIN_TRIM, i),
                     "/h_${sid}_${i}_name" to Triple(Pro2Commands.nameAddress(), ParamKind.NAME, i),
@@ -1368,6 +1412,8 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_${i}_delay" to Triple(Pro2Commands.inputDelayAddress(), ParamKind.INPUT_DELAY, i),
                     "/h_${sid}_${i}_compgr" to Triple(Pro2Commands.compGrMeterAddress(), ParamKind.COMP_GR_METER, i),
                     "/h_${sid}_${i}_gategr" to Triple(Pro2Commands.gateGrMeterAddress(), ParamKind.GATE_GR_METER, i),
+                    "/h_${sid}_${i}_compdet" to Triple(Pro2Commands.compDetMeterAddress(), ParamKind.COMP_DET_METER, i),
+                    "/h_${sid}_${i}_gatedet" to Triple(Pro2Commands.gateDetMeterAddress(), ParamKind.GATE_DET_METER, i),
                     "/h_${sid}_${i}_compflt" to Triple(Pro2Commands.compFiltersInAddress(), ParamKind.COMP_FILTERS_IN, i),
                     "/h_${sid}_${i}_compfltfreq" to Triple(Pro2Commands.compFilterFreqAddress(), ParamKind.COMP_FILTER_FREQ, i),
                 )
@@ -1390,6 +1436,7 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_m${m}_fader" to Triple(Pro2Commands.masterFaderAddress(), ParamKind.FADER, m),
                     "/h_${sid}_m${m}_mute" to Triple(Pro2Commands.masterMuteAddress(), ParamKind.MUTE, m),
                     "/h_${sid}_m${m}_solo" to Triple(Pro2Commands.masterSoloAddress(), ParamKind.SOLO, m),
+                    "/h_${sid}_m${m}_solob" to Triple(Pro2Commands.masterSoloBAddress(), ParamKind.SOLO_B, m),
                     "/h_${sid}_m${m}_meter" to Triple(Pro2Commands.masterMeterAddress(), ParamKind.METER, m),
                     "/h_${sid}_m${m}_name" to Triple(Pro2Commands.masterNameAddress(), ParamKind.NAME, m),
                 )
@@ -1411,8 +1458,10 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_a${a}_fader" to Triple(Pro2Commands.auxReturnFaderAddress(), ParamKind.FADER, a),
                     "/h_${sid}_a${a}_mute" to Triple(Pro2Commands.auxReturnMuteAddress(), ParamKind.MUTE, a),
                     "/h_${sid}_a${a}_solo" to Triple(Pro2Commands.auxReturnSoloAddress(), ParamKind.SOLO, a),
+                    "/h_${sid}_a${a}_solob" to Triple(Pro2Commands.auxReturnSoloBAddress(), ParamKind.SOLO_B, a),
                     "/h_${sid}_a${a}_meter" to Triple(Pro2Commands.auxReturnMeterAddress(), ParamKind.METER, a),
                     "/h_${sid}_a${a}_name" to Triple(Pro2Commands.auxReturnNameAddress(), ParamKind.NAME, a),
+                    "/h_${sid}_a${a}_colour" to Triple(Pro2Commands.auxReturnColourAddress(), ParamKind.COLOUR, a),
                 )
                 for ((handle, info) in auxSubs) {
                     val (path, kind, aIdx) = info
@@ -1433,6 +1482,7 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_b${b}_fader" to Triple(Pro2Commands.auxBusFaderAddress(), ParamKind.FADER, b),
                     "/h_${sid}_b${b}_mute" to Triple(Pro2Commands.auxBusMuteAddress(), ParamKind.MUTE, b),
                     "/h_${sid}_b${b}_solo" to Triple(Pro2Commands.auxBusSoloAddress(), ParamKind.SOLO, b),
+                    "/h_${sid}_b${b}_solob" to Triple(Pro2Commands.auxBusSoloBAddress(), ParamKind.SOLO_B, b),
                     "/h_${sid}_b${b}_meter" to Triple(Pro2Commands.auxBusMeterAddress(), ParamKind.METER, b),
                     "/h_${sid}_b${b}_name" to Triple(Pro2Commands.auxBusNameAddress(), ParamKind.NAME, b),
                     "/h_${sid}_b${b}_colour" to Triple(Pro2Commands.auxBusColourAddress(), ParamKind.COLOUR, b),
@@ -1455,6 +1505,7 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_v${v}_mute" to Triple(Pro2Commands.vcaMuteAddress(), ParamKind.MUTE, v),
                     "/h_${sid}_v${v}_solo" to Triple(Pro2Commands.vcaSoloAddress(), ParamKind.SOLO, v),
                     "/h_${sid}_v${v}_name" to Triple(Pro2Commands.vcaNameAddress(), ParamKind.NAME, v),
+                    "/h_${sid}_v${v}_colour" to Triple(Pro2Commands.vcaColourAddress(), ParamKind.COLOUR, v),
                 )
                 for ((handle, info) in vcaSubs) {
                     val (path, kind, vIdx) = info
@@ -1539,6 +1590,9 @@ class MainActivity : AppCompatActivity() {
                 subs.add(Triple("/h_${sid}_${channel}_eqgain$bandIndex", Pro2Commands.eqGainAddress(band), Subscription(channel, ParamKind.EQ_GAIN, eqBand = bandIndex)))
                 subs.add(Triple("/h_${sid}_${channel}_eqwidth$bandIndex", Pro2Commands.eqWidthAddress(band), Subscription(channel, ParamKind.EQ_WIDTH, eqBand = bandIndex)))
             }
+            // Форма (bell/shelf) - ТОЛЬКО у BASS (индекс 0) и TREBLE (индекс 3).
+            subs.add(Triple("/h_${sid}_${channel}_eqshapebass", Pro2Commands.eqShapeAddress(Pro2Commands.EqBand.BASS), Subscription(channel, ParamKind.EQ_SHAPE_BASS)))
+            subs.add(Triple("/h_${sid}_${channel}_eqshapetreble", Pro2Commands.eqShapeAddress(Pro2Commands.EqBand.TREBLE), Subscription(channel, ParamKind.EQ_SHAPE_TREBLE)))
             for ((handle, path, sub) in subs) {
                 withContext(Dispatchers.Main) { subscriptions[handle] = sub }
                 try {
@@ -1609,6 +1663,15 @@ class MainActivity : AppCompatActivity() {
                 val soloed = blob.size >= 4 &&
                     ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
                 updateSoloUi(sub.channel, soloed)
+            }
+            ParamKind.SOLO_B -> {
+                val soloed = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.channelData[sub.channel].soloBLocal = soloed
+                if (openDetailChannel == sub.channel) {
+                    detailSoloBRef?.isChecked = soloed
+                    detailSoloBRef?.setBackgroundColor(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
+                }
             }
             ParamKind.FADER, ParamKind.GAIN -> {
                 // Подтверждено: 4 байта, little-endian float32, диапазон 0..1.
@@ -1727,6 +1790,22 @@ class MainActivity : AppCompatActivity() {
                     updateEqParamUi(sub.channel, sub.eqBand, sub.kind, level)
                 }
             }
+            ParamKind.EQ_SHAPE_BASS -> {
+                val isShelf = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.channelData[sub.channel].eqBassShelf = isShelf
+                if (openDetailChannel == sub.channel) {
+                    detailEqViews?.bassShapeButton?.text = if (isShelf) "SHELF" else "BELL"
+                }
+            }
+            ParamKind.EQ_SHAPE_TREBLE -> {
+                val isShelf = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.channelData[sub.channel].eqTrebleShelf = isShelf
+                if (openDetailChannel == sub.channel) {
+                    detailEqViews?.trebleShapeButton?.text = if (isShelf) "SHELF" else "BELL"
+                }
+            }
             ParamKind.PAN -> {
                 if (blob.size >= 4) {
                     val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN)
@@ -1809,6 +1888,24 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+            ParamKind.COMP_DET_METER -> {
+                if (blob.isNotEmpty()) {
+                    val level = ((blob[0].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
+                    ConnectionHolder.channelData[sub.channel].compDetMeter = level
+                    if (openDetailChannel == sub.channel) {
+                        detailCompDynViews?.detText?.text = "IN %.1f".format(level * 60f - 60f)
+                    }
+                }
+            }
+            ParamKind.GATE_DET_METER -> {
+                if (blob.isNotEmpty()) {
+                    val level = ((blob[0].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
+                    ConnectionHolder.channelData[sub.channel].gateDetMeter = level
+                    if (openDetailChannel == sub.channel) {
+                        detailGateDynViews?.detText?.text = "IN %.1f".format(level * 60f - 60f)
+                    }
+                }
+            }
             ParamKind.AUX_SEND_ENABLE -> {
                 val on = blob.size >= 4 &&
                     ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
@@ -1860,6 +1957,12 @@ class MainActivity : AppCompatActivity() {
                     ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
                 updateMasterSoloUi(sub.channel, soloed)
             }
+            ParamKind.SOLO_B -> {
+                val soloed = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.masterData.getOrNull(sub.channel)?.soloBLocal = soloed
+                updateSimpleStripSoloB(masterStrips, sub.channel, soloed)
+            }
             ParamKind.METER -> {
                 if (blob.isEmpty()) return
                 val level = ((blob[0].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
@@ -1894,6 +1997,12 @@ class MainActivity : AppCompatActivity() {
                     ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
                 updateAuxReturnSoloUi(sub.channel, soloed)
             }
+            ParamKind.SOLO_B -> {
+                val soloed = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.auxReturnData.getOrNull(sub.channel)?.soloBLocal = soloed
+                updateSimpleStripSoloB(auxStrips, sub.channel, soloed)
+            }
             ParamKind.METER -> {
                 if (blob.isEmpty()) return
                 val level = ((blob[0].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
@@ -1904,6 +2013,17 @@ class MainActivity : AppCompatActivity() {
                 if (name.isBlank()) return
                 ConnectionHolder.auxReturnData.getOrNull(sub.channel)?.name = name
                 auxStrips.getOrNull(sub.channel)?.labelView?.text = name
+            }
+            ParamKind.COLOUR -> {
+                if (blob.size >= 4) {
+                    val r = blob[0].toInt() and 0xFF
+                    val g = blob[1].toInt() and 0xFF
+                    val b = blob[2].toInt() and 0xFF
+                    val a = blob[3].toInt() and 0xFF
+                    val argb = (a shl 24) or (r shl 16) or (g shl 8) or b
+                    ConnectionHolder.auxReturnData.getOrNull(sub.channel)?.colourArgb = argb
+                    auxStrips.getOrNull(sub.channel)?.headerView?.setBackgroundColor(argb)
+                }
             }
             else -> {}
         }
@@ -1946,6 +2066,12 @@ class MainActivity : AppCompatActivity() {
                 ui.soloButton.isChecked = soloed
                 ui.soloButton.setBackgroundColor(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
                 ui.suppressEvents = false
+            }
+            ParamKind.SOLO_B -> {
+                val soloed = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.auxBusData.getOrNull(sub.channel)?.soloBLocal = soloed
+                updateSimpleStripSoloB(auxBusStrips, sub.channel, soloed)
             }
             ParamKind.METER -> {
                 if (blob.isEmpty()) return
@@ -2012,6 +2138,17 @@ class MainActivity : AppCompatActivity() {
                 ConnectionHolder.vcaData.getOrNull(sub.channel)?.name = name
                 vcaStrips.getOrNull(sub.channel)?.labelView?.text = name
             }
+            ParamKind.COLOUR -> {
+                if (blob.size >= 4) {
+                    val r = blob[0].toInt() and 0xFF
+                    val g = blob[1].toInt() and 0xFF
+                    val b = blob[2].toInt() and 0xFF
+                    val a = blob[3].toInt() and 0xFF
+                    val argb = (a shl 24) or (r shl 16) or (g shl 8) or b
+                    ConnectionHolder.vcaData.getOrNull(sub.channel)?.colourArgb = argb
+                    vcaStrips.getOrNull(sub.channel)?.headerView?.setBackgroundColor(argb)
+                }
+            }
             else -> {}
         }
     }
@@ -2031,6 +2168,15 @@ class MainActivity : AppCompatActivity() {
             else -> "#34c759"
         }
         ui.meterBar.setBackgroundColor(Color.parseColor(color))
+    }
+
+    /** Общая функция для обновления Solo B у master/aux returns/aux-шин (все используют SimpleStripUi). */
+    private fun updateSimpleStripSoloB(list: List<SimpleStripUi>, index: Int, soloed: Boolean) {
+        val ui = list.getOrNull(index) ?: return
+        ui.suppressEvents = true
+        ui.soloBButton.isChecked = soloed
+        ui.soloBButton.setBackgroundColor(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
+        ui.suppressEvents = false
     }
 
     private fun updateColourUi(channel: Int, argbColor: Int) {
@@ -2108,7 +2254,9 @@ class MainActivity : AppCompatActivity() {
         val bands: Array<EqBandViews>,
         val graphView: EqCurveView,
         val hpButton: Button,
-        val lpButton: Button
+        val lpButton: Button,
+        val bassShapeButton: Button?,
+        val trebleShapeButton: Button?
     )
     private var detailEqViews: EqBlockViews? = null
     // Живые ссылки на виджеты вкладки INPUT, пока детальный экран открыт -
@@ -2124,6 +2272,7 @@ class MainActivity : AppCompatActivity() {
     private var detailDelaySeek: SeekBar? = null
     private var detailGainTrimKnobRef: RotaryKnobView? = null
     private var detailGainTrimValueRef: TextView? = null
+    private var detailSoloBRef: ToggleButton? = null
 
     /** Общая структура для вкладок COMP и GATE - сетка ручек + график + IN/фильтр. */
     private data class DynamicsBlockViews(
@@ -2133,7 +2282,8 @@ class MainActivity : AppCompatActivity() {
         val filtersInButton: Button?,
         val thresholdKind: ParamKind,
         val ratioOrRangeKind: ParamKind,
-        val grText: TextView
+        val grText: TextView,
+        val detText: TextView
     )
     private var detailCompDynViews: DynamicsBlockViews? = null
     private var detailGateDynViews: DynamicsBlockViews? = null
@@ -2323,6 +2473,7 @@ class MainActivity : AppCompatActivity() {
             detailDelaySeek = null
             detailGainTrimKnobRef = null
             detailGainTrimValueRef = null
+            detailSoloBRef = null
             detailGateDynViews = null
         }
 
@@ -2354,6 +2505,19 @@ class MainActivity : AppCompatActivity() {
             updateSoloUi(channel, isChecked)
             sendSolo(channel, isChecked)
         }
+
+        val detailSoloB = view.findViewById<ToggleButton>(R.id.detailSoloB)
+        detailSoloB.backgroundTintList = null
+        detailSoloB.stateListAnimator = null
+        val soloBData = ConnectionHolder.channelData[channel]
+        detailSoloB.isChecked = soloBData.soloBLocal
+        detailSoloB.setBackgroundColor(Color.parseColor(if (soloBData.soloBLocal) "#ff9f0a" else "#3a3a3c"))
+        detailSoloB.setOnCheckedChangeListener { _, isChecked ->
+            ConnectionHolder.channelData[channel].soloBLocal = isChecked
+            detailSoloB.setBackgroundColor(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
+            sendRawAsync(Pro2Commands.setSoloB(channel, isChecked))
+        }
+        detailSoloBRef = detailSoloB
         detailFader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                 val level = progress / 1000f
@@ -2414,6 +2578,7 @@ class MainActivity : AppCompatActivity() {
         val inputBlock = view.findViewById<android.widget.LinearLayout>(R.id.inputBlockContent)
         val compBlock = view.findViewById<android.widget.LinearLayout>(R.id.compBlockContent)
         val sendsBlock = view.findViewById<android.widget.HorizontalScrollView>(R.id.sendsBlockContent)
+        val tabContentScroll = view.findViewById<android.widget.ScrollView>(R.id.tabContentScroll)
         val eqBlock = view.findViewById<android.widget.LinearLayout>(R.id.eqBlockContent)
         val gateBlock = view.findViewById<android.widget.LinearLayout>(R.id.gateBlockContent)
 
@@ -2432,6 +2597,12 @@ class MainActivity : AppCompatActivity() {
             sendsBlock.visibility = android.view.View.GONE
             eqBlock.visibility = android.view.View.GONE
             gateBlock.visibility = android.view.View.GONE
+            // ВАЖНО: сама ScrollView-обёртка вокруг INPUT/COMP/EQ/GATE
+            // никогда не пряталась раньше - только её содержимое. Из-за
+            // этого пустая ScrollView всё равно занимала половину ширины
+            // (weight=1 наравне с SENDS), сжимая таблицу SENDS в правую
+            // половину экрана. Теперь скрываем и её саму на вкладке SENDS.
+            tabContentScroll.visibility = android.view.View.VISIBLE
         }
         fun showInput() {
             hideAllBlocks()
@@ -2445,6 +2616,7 @@ class MainActivity : AppCompatActivity() {
         }
         fun showSends() {
             hideAllBlocks()
+            tabContentScroll.visibility = android.view.View.GONE
             sendsBlock.visibility = android.view.View.VISIBLE
             selectTab(tabSends)
         }
@@ -2577,14 +2749,14 @@ class MainActivity : AppCompatActivity() {
                 backgroundTintList = null
                 minHeight = 0
                 textSize = 10f
-                setPadding(8, 6, 8, 6)
+                setPadding(4, 4, 4, 4)
                 text = if (sendsData.auxSendPreFade[bus - 1]) "PRE" else "POST"
                 setTextColor(Color.parseColor("#ffffff"))
                 setBackgroundColor(Color.parseColor("#3a3a3c"))
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { topMargin = 8 }
+                ).apply { topMargin = 4 }
                 setOnClickListener {
                     val newState = !ConnectionHolder.channelData[channel].auxSendPreFade[bus - 1]
                     ConnectionHolder.channelData[channel].auxSendPreFade[bus - 1] = newState
@@ -2596,7 +2768,7 @@ class MainActivity : AppCompatActivity() {
                 backgroundTintList = null
                 minHeight = 0
                 textSize = 10f
-                setPadding(8, 6, 8, 6)
+                setPadding(4, 4, 4, 4)
                 text = if (sendsData.auxSendEnable[bus - 1]) "ON" else "OFF"
                 setTextColor(Color.parseColor("#ffffff"))
                 setBackgroundColor(Color.parseColor(if (sendsData.auxSendEnable[bus - 1]) "#34c759" else "#3a3a3c"))
@@ -2985,6 +3157,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         // --- Компактные карточки полос: имя + вкл/выкл + 3 мини-ручки ---
+        var bassShapeBtn: Button? = null
+        var trebleShapeBtn: Button? = null
         val bandViews = Array(4) { bandIndex ->
             val band = bandKinds[bandIndex]
 
@@ -3021,6 +3195,34 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             header.addView(bandLabel)
+            // Форма (bell/shelf) - ТОЛЬКО у BASS и TREBLE. ПОДТВЕРЖДЕНО
+            // реальным захватом трафика iPad.
+            if (bandIndex == 0 || bandIndex == 3) {
+                val isShelfInitial = if (bandIndex == 0) data.eqBassShelf else data.eqTrebleShelf
+                val shapeButton = Button(this).apply {
+                    text = if (isShelfInitial) "SHELF" else "BELL"
+                    textSize = 10f
+                    minHeight = 0
+                    minimumHeight = 0
+                    backgroundTintList = null
+                    setPadding(12, 4, 12, 4)
+                    setTextColor(Color.parseColor("#ffffff"))
+                    setBackgroundColor(Color.parseColor("#3a3a3c"))
+                    setOnClickListener {
+                        val d = ConnectionHolder.channelData[channel]
+                        val newState = if (bandIndex == 0) !d.eqBassShelf else !d.eqTrebleShelf
+                        if (bandIndex == 0) d.eqBassShelf = newState else d.eqTrebleShelf = newState
+                        text = if (newState) "SHELF" else "BELL"
+                        sendRawAsync(Pro2Commands.setEqShape(channel, band, newState))
+                    }
+                }
+                val shapeParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = 6 }
+                header.addView(shapeButton, shapeParams)
+                if (bandIndex == 0) bassShapeBtn = shapeButton else trebleShapeBtn = shapeButton
+            }
             header.addView(activeButton)
             container.addView(header)
 
@@ -3077,7 +3279,7 @@ class MainActivity : AppCompatActivity() {
             EqBandViews(activeButton, freqKnob, freqText, gainKnob, gainText, widthKnob, widthText)
         }
 
-        detailEqViews = EqBlockViews(eqInButton, bandViews, graph, hpButton, lpButton)
+        detailEqViews = EqBlockViews(eqInButton, bandViews, graph, hpButton, lpButton, bassShapeBtn, trebleShapeBtn)
     }
 
     private fun persistEq(channel: Int, bandIndex: Int, kind: ParamKind, level: Float) {
@@ -3146,13 +3348,20 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        val detText = TextView(this).apply {
+            text = "IN -0.0"
+            setTextColor(Color.parseColor("#666666"))
+            textSize = 10f
+            setPadding(8, 0, 8, 0)
+        }
         val grText = TextView(this).apply {
             text = "GR -0.0"
             setTextColor(Color.parseColor("#8e8e93"))
             textSize = 11f
-            setPadding(16, 0, 16, 0)
+            setPadding(8, 0, 16, 0)
         }
         header.addView(title)
+        header.addView(detText)
         header.addView(grText)
         header.addView(inButton)
         container.addView(header, android.widget.LinearLayout.LayoutParams(
@@ -3268,7 +3477,7 @@ class MainActivity : AppCompatActivity() {
         }
         container.addView(filtersInButton)
 
-        val views = DynamicsBlockViews(inButton, graph, knobViews, filtersInButton, thresholdKind, ratioOrRangeKind, grText)
+        val views = DynamicsBlockViews(inButton, graph, knobViews, filtersInButton, thresholdKind, ratioOrRangeKind, grText, detText)
         if (isGate) detailGateDynViews = views else detailCompDynViews = views
     }
 
@@ -3888,6 +4097,7 @@ class MainActivity : AppCompatActivity() {
             detailDelaySeek = null
             detailGainTrimKnobRef = null
             detailGainTrimValueRef = null
+            detailSoloBRef = null
             detailGateDynViews = null
             return
         }
