@@ -41,7 +41,7 @@ import java.nio.ByteBuffer
  *     which ones are confirmed vs. best-effort based on the address list.
  */
 // === Живая подписка на пульт (см. Pro2Commands.batchSubscribe) ===
-enum class ParamKind { FADER, MUTE, SOLO, SOLO_B, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, COMP_DET_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, EQ_SHAPE_BASS, EQ_SHAPE_TREBLE, PAN, PHANTOM, PHASE, GAIN_TRIM, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER, GATE_DET_METER }
+enum class ParamKind { FADER, MUTE, SOLO, SOLO_B, LINK, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, COMP_DET_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, EQ_SHAPE_BASS, EQ_SHAPE_TREBLE, PAN, PHANTOM, PHASE, GAIN_TRIM, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER, GATE_DET_METER }
 // Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX ШИНЫ, MASTER - мастер намеренно
 // в конце (по просьбе - обычно с ним работают реже всего).
 enum class StripMode { CHANNELS, AUX_RETURNS, AUX_BUS, VCA, MASTER }
@@ -97,6 +97,7 @@ data class ChannelData(
     var compDetMeter: Float = 0f,
     var gateDetMeter: Float = 0f,
     var soloBLocal: Boolean = false,
+    var linkedLocal: Boolean = false,
     var eqBassShelf: Boolean = false,
     var eqTrebleShelf: Boolean = false,
     // HP/LP фильтры и задержка входа - ПОДТВЕРЖДЕНО реальным захватом.
@@ -184,6 +185,8 @@ object ConnectionHolder {
     // Какие каналы уже подписаны на свой EQ (лениво, по требованию).
     val eqSubscribed = mutableSetOf<Int>()
     val gateSubscribed = mutableSetOf<Int>()
+    val inputExtrasSubscribed = mutableSetOf<Int>()
+    val compGateExtrasSubscribed = mutableSetOf<Int>()
     val channelData = Array(56) { ChannelData() }
     // По мануалу у Pro2 3 мастер-канала.
     val masterData = Array(3) { MasterData() }
@@ -267,6 +270,8 @@ class MainActivity : AppCompatActivity() {
     private val auxSendsSubscribed get() = ConnectionHolder.auxSendsSubscribed
     private val eqSubscribed get() = ConnectionHolder.eqSubscribed
     private val gateSubscribed get() = ConnectionHolder.gateSubscribed
+    private val inputExtrasSubscribed get() = ConnectionHolder.inputExtrasSubscribed
+    private val compGateExtrasSubscribed get() = ConnectionHolder.compGateExtrasSubscribed
 
     private data class ChannelUi(
         val rootView: android.view.View,
@@ -621,20 +626,24 @@ class MainActivity : AppCompatActivity() {
             val sid = sessionId
             for (ch in 0 until numChannels) {
                 val handle = "/h_${sid}_${ch}_msend${bus}"
-                withContext(Dispatchers.Main) { subscriptions[handle] = Subscription(ch, ParamKind.AUX_SEND, bus + 1) }
+                val nameHandle = "/h_${sid}_${ch}_mname"
+                withContext(Dispatchers.Main) {
+                    subscriptions[handle] = Subscription(ch, ParamKind.AUX_SEND, bus + 1)
+                    subscriptions[nameHandle] = Subscription(ch, ParamKind.NAME)
+                }
                 try {
                     sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, Pro2Commands.subSendLevelAddress(bus + 1), ch, ch, token))
                 } catch (e: Exception) {
                     // не критично - не прерываем остальные
                 }
+                delay(2)
                 // Заодно и имена каналов - вдруг ещё не подписаны.
-                val nameHandle = "/h_${sid}_${ch}_mname"
-                withContext(Dispatchers.Main) { subscriptions[nameHandle] = Subscription(ch, ParamKind.NAME) }
                 try {
                     sendRaw(sock, address, port, Pro2Commands.batchSubscribe(nameHandle, Pro2Commands.nameAddress(), ch, ch, token))
                 } catch (e: Exception) {
                     // не критично
                 }
+                delay(2)
             }
         }
     }
@@ -672,6 +681,7 @@ class MainActivity : AppCompatActivity() {
             val soloButton = strip.findViewById<ToggleButton>(R.id.btnSolo)
             val headerView = strip.findViewById<android.view.View>(R.id.channelHeader)
             val meterBar = strip.findViewById<android.view.View>(R.id.meterBar)
+            setupMeterBarPivot(meterBar)
 
             // Раньше исходный серый фон задавался через android:backgroundTint в XML,
             // но AppCompat-тема иногда переприменяет тинт поверх ручного
@@ -900,6 +910,7 @@ class MainActivity : AppCompatActivity() {
         val soloButton = strip.findViewById<ToggleButton>(R.id.btnSolo)
         val soloBButton = strip.findViewById<ToggleButton>(R.id.btnSoloB)
         val meterBar = strip.findViewById<android.view.View>(R.id.meterBar)
+        setupMeterBarPivot(meterBar)
         val headerView = strip.findViewById<android.view.View>(R.id.channelHeader)
 
         labelView.text = label
@@ -1066,6 +1077,7 @@ class MainActivity : AppCompatActivity() {
                 showSoloB = false
             )
             vcaStrips.add(ui)
+            ui.headerView.setOnClickListener { openVcaMembers(v) }
         }
     }
 
@@ -1166,6 +1178,8 @@ class MainActivity : AppCompatActivity() {
         auxSendsSubscribed.clear()
         eqSubscribed.clear()
         gateSubscribed.clear()
+        inputExtrasSubscribed.clear()
+        compGateExtrasSubscribed.clear()
         sessionId = System.currentTimeMillis().toString(36)
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -1183,7 +1197,20 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 startReceiveLoop(newSocket)
-                requestInitialState(newSocket, address, port)
+
+                // ВАЖНО: раньше здесь всегда запрашивалось начальное
+                // состояние ВСЕХ 56 каналов (280 GET-запросов без пауз) и
+                // полная подписка (~800 параметров), даже для мониторного
+                // режима, которому это всё вообще не нужно (мониторке нужны
+                // только aux-шины + позже посылы выбранной шины). Из-за
+                // этого суммарная нагрузка на пульт при подключении
+                // мониторки оказывалась БОЛЬШЕ, чем у инженерского режима,
+                // и, судя по всему, именно это сбивало официальный Mixtender.
+                if (appMode == MODE_MONITOR) {
+                    subscribeMonitorEssentials(newSocket, address, port)
+                } else {
+                    requestInitialState(newSocket, address, port)
+                }
 
                 // ВАЖНО - ИСПРАВЛЕНИЕ ЗАЦИКЛИВАНИЯ: раньше подписка ждала, пока
                 // придёт входящий пакет с "токеном" пульта, чтобы его переиспользовать.
@@ -1196,7 +1223,9 @@ class MainActivity : AppCompatActivity() {
                 // sessionToken обновится, но переподписываться заново не обязательно.
                 subscribedAlready = true
                 sessionToken = 0
-                subscribeAll()
+                if (appMode != MODE_MONITOR) {
+                    subscribeAll()
+                }
                 startPollLoop(newSocket, address, port)
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -1208,13 +1237,46 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun requestInitialState(socket: DatagramSocket, address: InetAddress, port: Int) {
+    private suspend fun requestInitialState(socket: DatagramSocket, address: InetAddress, port: Int) {
         for (i in 0 until numChannels) {
             sendRaw(socket, address, port, Pro2Commands.getFader(i))
             sendRaw(socket, address, port, Pro2Commands.getMute(i))
             sendRaw(socket, address, port, Pro2Commands.getSolo(i))
             sendRaw(socket, address, port, Pro2Commands.getGain(i))
             sendRaw(socket, address, port, Pro2Commands.getName(i))
+            delay(2)
+        }
+    }
+
+    /**
+     * Облегчённая подписка специально для мониторного режима - только то,
+     * что реально нужно для списка шин (фейдер/mute/имя/цвет по 16
+     * aux-шинам, ~64 подписки вместо ~800 у инженерского режима). Посылы
+     * конкретных каналов в выбранную шину подписываются отдельно и позже,
+     * когда пользователь реально выберет шину (subscribeChannelSendsForBus).
+     */
+    private suspend fun subscribeMonitorEssentials(socket: DatagramSocket, address: InetAddress, port: Int) {
+        val token = sessionToken ?: 0
+        val sid = sessionId
+        for (b in 0 until 16) {
+            val subs = listOf(
+                "/h_${sid}_mb${b}_fader" to Triple(Pro2Commands.auxBusFaderAddress(), ParamKind.FADER, b),
+                "/h_${sid}_mb${b}_mute" to Triple(Pro2Commands.auxBusMuteAddress(), ParamKind.MUTE, b),
+                "/h_${sid}_mb${b}_name" to Triple(Pro2Commands.auxBusNameAddress(), ParamKind.NAME, b),
+                "/h_${sid}_mb${b}_colour" to Triple(Pro2Commands.auxBusColourAddress(), ParamKind.COLOUR, b),
+            )
+            withContext(Dispatchers.Main) {
+                for ((handle, info) in subs) auxBusSubscriptions[handle] = Subscription(info.third, info.second)
+            }
+            for ((handle, info) in subs) {
+                val (path, kind, ch) = info
+                try {
+                    sendRaw(socket, address, port, Pro2Commands.batchSubscribe(handle, path, ch, ch, token))
+                } catch (e: Exception) {
+                    // не критично
+                }
+                delay(2)
+            }
         }
     }
 
@@ -1257,7 +1319,19 @@ class MainActivity : AppCompatActivity() {
                     val element = OscUtil.decodeElement(data) ?: continue
                     val messages = OscUtil.flatten(element)
 
-                    withContext(Dispatchers.Main) {
+                    // ВАЖНО (исправление зависания метров): раньше здесь стоял
+                    // withContext(Dispatchers.Main), который блокирует цикл
+                    // приёма, пока обновление интерфейса полностью не
+                    // закончится - и только потом читается следующий пакет
+                    // из сокета. Метры обновляются намного чаще всего
+                    // остального (десятки раз в секунду по всем каналам), и
+                    // при любой задержке на главном потоке буфер ОС
+                    // переполняется, а лишние UDP-пакеты молча теряются -
+                    // именно метры страдают от этого первыми и сильнее
+                    // всего. Теперь просто "отправляем и забываем" - цикл
+                    // приёма сразу же возвращается вычитывать сокет дальше,
+                    // не дожидаясь окончания отрисовки.
+                    CoroutineScope(Dispatchers.Main).launch {
                         for (msg in messages) handleIncomingMessage(msg)
                     }
                 } catch (e: SocketTimeoutException) {
@@ -1390,9 +1464,7 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_${i}_fader" to Triple(Pro2Commands.faderAddress(), ParamKind.FADER, i),
                     "/h_${sid}_${i}_mute" to Triple(Pro2Commands.muteAddress(), ParamKind.MUTE, i),
                     "/h_${sid}_${i}_solo" to Triple(Pro2Commands.soloAddress(), ParamKind.SOLO, i),
-                    "/h_${sid}_${i}_solob" to Triple(Pro2Commands.soloBAddress(), ParamKind.SOLO_B, i),
                     "/h_${sid}_${i}_gain" to Triple(Pro2Commands.gainAddress(), ParamKind.GAIN, i),
-                    "/h_${sid}_${i}_gaintrim" to Triple(Pro2Commands.gainTrimAddress(), ParamKind.GAIN_TRIM, i),
                     "/h_${sid}_${i}_name" to Triple(Pro2Commands.nameAddress(), ParamKind.NAME, i),
                     "/h_${sid}_${i}_colour" to Triple(Pro2Commands.colourAddress(), ParamKind.COLOUR, i),
                     "/h_${sid}_${i}_meter" to Triple(Pro2Commands.meterAddress(), ParamKind.METER, i),
@@ -1402,29 +1474,31 @@ class MainActivity : AppCompatActivity() {
                     "/h_${sid}_${i}_compthreshold" to Triple(Pro2Commands.compThresholdAddress(), ParamKind.COMP_THRESHOLD, i),
                     "/h_${sid}_${i}_compmakeup" to Triple(Pro2Commands.compMakeupGainAddress(), ParamKind.COMP_MAKEUP, i),
                     "/h_${sid}_${i}_compin" to Triple(Pro2Commands.compInAddress(), ParamKind.COMP_IN, i),
-                    "/h_${sid}_${i}_pan" to Triple(Pro2Commands.panAddress(), ParamKind.PAN, i),
-                    "/h_${sid}_${i}_phantom" to Triple(Pro2Commands.phantomPowerAddress(), ParamKind.PHANTOM, i),
-                    "/h_${sid}_${i}_phase" to Triple(Pro2Commands.phaseAddress(), ParamKind.PHASE, i),
-                    "/h_${sid}_${i}_hpin" to Triple(Pro2Commands.hpFilterInAddress(), ParamKind.HP_FILTER_IN, i),
-                    "/h_${sid}_${i}_hpfreq" to Triple(Pro2Commands.hpFilterFreqAddress(), ParamKind.HP_FILTER_FREQ, i),
-                    "/h_${sid}_${i}_lpin" to Triple(Pro2Commands.lpFilterInAddress(), ParamKind.LP_FILTER_IN, i),
-                    "/h_${sid}_${i}_lpfreq" to Triple(Pro2Commands.lpFilterFreqAddress(), ParamKind.LP_FILTER_FREQ, i),
-                    "/h_${sid}_${i}_delay" to Triple(Pro2Commands.inputDelayAddress(), ParamKind.INPUT_DELAY, i),
-                    "/h_${sid}_${i}_compgr" to Triple(Pro2Commands.compGrMeterAddress(), ParamKind.COMP_GR_METER, i),
-                    "/h_${sid}_${i}_gategr" to Triple(Pro2Commands.gateGrMeterAddress(), ParamKind.GATE_GR_METER, i),
-                    "/h_${sid}_${i}_compdet" to Triple(Pro2Commands.compDetMeterAddress(), ParamKind.COMP_DET_METER, i),
-                    "/h_${sid}_${i}_gatedet" to Triple(Pro2Commands.gateDetMeterAddress(), ParamKind.GATE_DET_METER, i),
-                    "/h_${sid}_${i}_compflt" to Triple(Pro2Commands.compFiltersInAddress(), ParamKind.COMP_FILTERS_IN, i),
-                    "/h_${sid}_${i}_compfltfreq" to Triple(Pro2Commands.compFilterFreqAddress(), ParamKind.COMP_FILTER_FREQ, i),
                 )
+                // ВАЖНО (исправление потерянных подписок): раньше здесь на
+                // КАЖДУЮ подписку было отдельное переключение на главный
+                // поток (withContext), да ещё пакеты слались вообще без
+                // пауз - пульт получал шквал из тысяч UDP-пакетов почти
+                // одновременно и, судя по всему, часть просто не успевал
+                // обработать (отсюда непокрашенные/неподписанные каналы и
+                // шины). Теперь: сначала одним пакетом регистрируем все
+                // хендлы (один переход на главный поток вместо тысячи), а
+                // сами пакеты шлём с небольшой паузой между ними - хватает,
+                // чтобы не заваливать пульт, но не сильно удлиняет общее
+                // время подписки.
+                withContext(Dispatchers.Main) {
+                    for ((handle, info) in subs) {
+                        subscriptions[handle] = Subscription(info.third, info.second)
+                    }
+                }
                 for ((handle, info) in subs) {
                     val (path, kind, channel) = info
-                    withContext(Dispatchers.Main) { subscriptions[handle] = Subscription(channel, kind) }
                     try {
                         sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, channel, channel, token))
                     } catch (e: Exception) {
                         // подписка на один параметр не удалась - не прерываем остальные
                     }
+                    delay(2)
                 }
             }
 
@@ -1542,26 +1616,31 @@ class MainActivity : AppCompatActivity() {
             val sid = sessionId
             for (bus in 1..16) {
                 val handle = "/h_${sid}_${channel}_send$bus"
-                withContext(Dispatchers.Main) { subscriptions[handle] = Subscription(channel, ParamKind.AUX_SEND, bus) }
+                val enHandle = "/h_${sid}_${channel}_senden$bus"
+                val preHandle = "/h_${sid}_${channel}_sendpre$bus"
+                withContext(Dispatchers.Main) {
+                    subscriptions[handle] = Subscription(channel, ParamKind.AUX_SEND, bus)
+                    subscriptions[enHandle] = Subscription(channel, ParamKind.AUX_SEND_ENABLE, bus)
+                    subscriptions[preHandle] = Subscription(channel, ParamKind.AUX_SEND_PREFADE, bus)
+                }
                 try {
                     sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, Pro2Commands.subSendLevelAddress(bus), channel, channel, token))
                 } catch (e: Exception) {
                     // не критично
                 }
-                val enHandle = "/h_${sid}_${channel}_senden$bus"
-                withContext(Dispatchers.Main) { subscriptions[enHandle] = Subscription(channel, ParamKind.AUX_SEND_ENABLE, bus) }
+                delay(2)
                 try {
                     sendRaw(sock, address, port, Pro2Commands.batchSubscribe(enHandle, Pro2Commands.subSendEnableAddress(bus), channel, channel, token))
                 } catch (e: Exception) {
                     // не критично
                 }
-                val preHandle = "/h_${sid}_${channel}_sendpre$bus"
-                withContext(Dispatchers.Main) { subscriptions[preHandle] = Subscription(channel, ParamKind.AUX_SEND_PREFADE, bus) }
+                delay(2)
                 try {
                     sendRaw(sock, address, port, Pro2Commands.batchSubscribe(preHandle, Pro2Commands.subSendPreFadeAddress(bus), channel, channel, token))
                 } catch (e: Exception) {
                     // не критично
                 }
+                delay(2)
             }
         }
     }
@@ -1593,18 +1672,105 @@ class MainActivity : AppCompatActivity() {
             // Форма (bell/shelf) - ТОЛЬКО у BASS (индекс 0) и TREBLE (индекс 3).
             subs.add(Triple("/h_${sid}_${channel}_eqshapebass", Pro2Commands.eqShapeAddress(Pro2Commands.EqBand.BASS), Subscription(channel, ParamKind.EQ_SHAPE_BASS)))
             subs.add(Triple("/h_${sid}_${channel}_eqshapetreble", Pro2Commands.eqShapeAddress(Pro2Commands.EqBand.TREBLE), Subscription(channel, ParamKind.EQ_SHAPE_TREBLE)))
+            withContext(Dispatchers.Main) {
+                for ((handle, _, sub) in subs) subscriptions[handle] = sub
+            }
             for ((handle, path, sub) in subs) {
-                withContext(Dispatchers.Main) { subscriptions[handle] = sub }
                 try {
                     sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, channel, channel, token))
                 } catch (e: Exception) {
                     // не критично
                 }
+                delay(2)
             }
         }
     }
 
     /** Лениво подписывается на 9 параметров Gate одного канала. */
+    /**
+     * Лениво подписывается на pan/48V/фазу/GAIN TRIM/HP-LP-фильтры/задержку/
+     * Solo B этого канала - раньше все эти 10 параметров были в общей
+     * мгновенной подписке при подключении (56 каналов × 10 = 560 лишних
+     * подписок), что, судя по всему, перегружало пульт настолько, что
+     * сбоил даже официальный Mixtender на другом устройстве. Теперь - как
+     * и с EQ/Gate/Sends - только при реальном открытии вкладки INPUT.
+     */
+    private fun subscribeInputExtras(channel: Int) {
+        val sock = socket ?: return
+        val address = consoleAddress ?: return
+        val port = consolePort
+        val token = sessionToken ?: return
+        if (inputExtrasSubscribed.contains(channel)) return
+        inputExtrasSubscribed.add(channel)
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val sid = sessionId
+            val subs = listOf(
+                "/h_${sid}_${channel}_solob" to Triple(Pro2Commands.soloBAddress(), ParamKind.SOLO_B, channel),
+                "/h_${sid}_${channel}_gaintrim" to Triple(Pro2Commands.gainTrimAddress(), ParamKind.GAIN_TRIM, channel),
+                "/h_${sid}_${channel}_pan" to Triple(Pro2Commands.panAddress(), ParamKind.PAN, channel),
+                "/h_${sid}_${channel}_phantom" to Triple(Pro2Commands.phantomPowerAddress(), ParamKind.PHANTOM, channel),
+                "/h_${sid}_${channel}_phase" to Triple(Pro2Commands.phaseAddress(), ParamKind.PHASE, channel),
+                "/h_${sid}_${channel}_hpin" to Triple(Pro2Commands.hpFilterInAddress(), ParamKind.HP_FILTER_IN, channel),
+                "/h_${sid}_${channel}_hpfreq" to Triple(Pro2Commands.hpFilterFreqAddress(), ParamKind.HP_FILTER_FREQ, channel),
+                "/h_${sid}_${channel}_lpin" to Triple(Pro2Commands.lpFilterInAddress(), ParamKind.LP_FILTER_IN, channel),
+                "/h_${sid}_${channel}_lpfreq" to Triple(Pro2Commands.lpFilterFreqAddress(), ParamKind.LP_FILTER_FREQ, channel),
+                "/h_${sid}_${channel}_delay" to Triple(Pro2Commands.inputDelayAddress(), ParamKind.INPUT_DELAY, channel),
+                "/h_${sid}_${channel}_link" to Triple(Pro2Commands.linkAddress(), ParamKind.LINK, channel),
+            )
+            withContext(Dispatchers.Main) {
+                for ((handle, info) in subs) subscriptions[handle] = Subscription(info.third, info.second)
+            }
+            for ((handle, info) in subs) {
+                val (path, kind, ch) = info
+                try {
+                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, ch, ch, token))
+                } catch (e: Exception) {
+                    // не критично
+                }
+                delay(2)
+            }
+        }
+    }
+
+    /**
+     * Лениво подписывается на фильтр компрессора и GR/detector-метры
+     * (компрессор и gate) этого канала - тоже раньше были в мгновенной
+     * подписке, тоже переведены на ленивую (см. заметку у subscribeInputExtras).
+     */
+    private fun subscribeCompGateExtras(channel: Int) {
+        val sock = socket ?: return
+        val address = consoleAddress ?: return
+        val port = consolePort
+        val token = sessionToken ?: return
+        if (compGateExtrasSubscribed.contains(channel)) return
+        compGateExtrasSubscribed.add(channel)
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val sid = sessionId
+            val subs = listOf(
+                "/h_${sid}_${channel}_compgr" to Triple(Pro2Commands.compGrMeterAddress(), ParamKind.COMP_GR_METER, channel),
+                "/h_${sid}_${channel}_compdet" to Triple(Pro2Commands.compDetMeterAddress(), ParamKind.COMP_DET_METER, channel),
+                "/h_${sid}_${channel}_compflt" to Triple(Pro2Commands.compFiltersInAddress(), ParamKind.COMP_FILTERS_IN, channel),
+                "/h_${sid}_${channel}_compfltfreq" to Triple(Pro2Commands.compFilterFreqAddress(), ParamKind.COMP_FILTER_FREQ, channel),
+                "/h_${sid}_${channel}_gategr" to Triple(Pro2Commands.gateGrMeterAddress(), ParamKind.GATE_GR_METER, channel),
+                "/h_${sid}_${channel}_gatedet" to Triple(Pro2Commands.gateDetMeterAddress(), ParamKind.GATE_DET_METER, channel),
+            )
+            withContext(Dispatchers.Main) {
+                for ((handle, info) in subs) subscriptions[handle] = Subscription(info.third, info.second)
+            }
+            for ((handle, info) in subs) {
+                val (path, kind, ch) = info
+                try {
+                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, ch, ch, token))
+                } catch (e: Exception) {
+                    // не критично
+                }
+                delay(2)
+            }
+        }
+    }
+
     private fun subscribeGate(channel: Int) {
         val sock = socket ?: return
         val address = consoleAddress ?: return
@@ -1626,14 +1792,17 @@ class MainActivity : AppCompatActivity() {
                 "/h_${sid}_${channel}_gatefreq" to Triple(Pro2Commands.gateFilterFreqAddress(), ParamKind.GATE_FILTER_FREQ, channel),
                 "/h_${sid}_${channel}_gateflt" to Triple(Pro2Commands.gateFiltersInAddress(), ParamKind.GATE_FILTERS_IN, channel),
             )
+            withContext(Dispatchers.Main) {
+                for ((handle, info) in subs) subscriptions[handle] = Subscription(info.third, info.second)
+            }
             for ((handle, info) in subs) {
                 val (path, kind, ch) = info
-                withContext(Dispatchers.Main) { subscriptions[handle] = Subscription(ch, kind) }
                 try {
                     sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, ch, ch, token))
                 } catch (e: Exception) {
                     // не критично
                 }
+                delay(2)
             }
         }
     }
@@ -1822,6 +1991,15 @@ class MainActivity : AppCompatActivity() {
                 val on = blob.size >= 4 &&
                     ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
                 updatePhaseUi(sub.channel, on)
+            }
+            ParamKind.LINK -> {
+                val on = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.channelData[sub.channel].linkedLocal = on
+                if (openDetailChannel == sub.channel) {
+                    detailLinkButton?.text = if (on) "LINK ON" else "LINK OFF"
+                    detailLinkButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+                }
             }
             ParamKind.HP_FILTER_IN -> {
                 val on = blob.size >= 4 &&
@@ -2156,12 +2334,9 @@ class MainActivity : AppCompatActivity() {
     /** Общая функция подсветки метра для мастера/aux returns/aux-шин (все используют SimpleStripUi). */
     private fun updateSimpleStripMeter(list: List<SimpleStripUi>, index: Int, level: Float) {
         val ui = list.getOrNull(index) ?: return
-        val parent = ui.meterBar.parent as? android.view.View ?: return
-        val totalHeight = parent.height
-        if (totalHeight <= 0) return
-        val params = ui.meterBar.layoutParams
-        params.height = (totalHeight * level).toInt().coerceAtLeast(0)
-        ui.meterBar.layoutParams = params
+        // Тот же переход на scaleY, что и у обычных каналов - см. заметку
+        // в updateMeterUi про исправление зависания метров.
+        ui.meterBar.scaleY = level.coerceIn(0f, 1f)
         val color = when {
             level > 0.85f -> "#ff3b30"
             level > 0.6f -> "#ff9f0a"
@@ -2200,15 +2375,32 @@ class MainActivity : AppCompatActivity() {
      * Двигает полоску метра снизу вверх на долю level (0..1) от доступной
      * высоты, и красит её зелёным/жёлтым/красным по типичным порогам VU-метра.
      */
+    private fun setupMeterBarPivot(meterBar: android.view.View) {
+        meterBar.viewTreeObserver.addOnGlobalLayoutListener(
+            object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                override fun onGlobalLayout() {
+                    if (meterBar.height > 0) {
+                        meterBar.pivotY = meterBar.height.toFloat()
+                        meterBar.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                    }
+                }
+            }
+        )
+    }
+
     private fun updateMeterUi(channel: Int, level: Float) {
         val ui = channels.getOrNull(channel) ?: return
-        val parent = ui.meterBar.parent as? android.view.View ?: return
-        val totalHeight = parent.height
-        if (totalHeight <= 0) return
-
-        val params = ui.meterBar.layoutParams
-        params.height = (totalHeight * level).toInt().coerceAtLeast(0)
-        ui.meterBar.layoutParams = params
+        // ВАЖНО (исправление зависания метров): раньше здесь мутировался
+        // layoutParams.height - это ЗАПУСКАЕТ ПОЛНЫЙ ПЕРЕСЧЁТ layout всей
+        // иерархии родителей на каждое обновление. Метры приходят намного
+        // чаще всего остального (десятки раз в секунду на каждый из 56
+        // каналов) - при таком объёме полных re-layout'ов главный поток не
+        // успевал, из-за чего метры визуально "зависали"/дёргались. Теперь
+        // используем scaleY - это чисто визуальное преобразование
+        // (аппаратное ускорение, без re-layout), высота метра всегда
+        // match_parent, просто видимая часть масштабируется.
+        val clamped = level.coerceIn(0f, 1f)
+        ui.meterBar.scaleY = clamped
 
         val color = when {
             level > 0.85f -> "#ff3b30" // красный - близко к перегрузке
@@ -2220,14 +2412,8 @@ class MainActivity : AppCompatActivity() {
         // Если детальный экран для этого канала открыт - синхронизируем и его метр.
         if (openDetailChannel == channel) {
             val dv = detailViews ?: return
-            val dParent = dv.meterBar.parent as? android.view.View ?: return
-            val dHeight = dParent.height
-            if (dHeight > 0) {
-                val dParams = dv.meterBar.layoutParams
-                dParams.height = (dHeight * level).toInt().coerceAtLeast(0)
-                dv.meterBar.layoutParams = dParams
-                dv.meterBar.setBackgroundColor(Color.parseColor(color))
-            }
+            dv.meterBar.scaleY = clamped
+            dv.meterBar.setBackgroundColor(Color.parseColor(color))
         }
     }
 
@@ -2265,6 +2451,7 @@ class MainActivity : AppCompatActivity() {
     private var detailPanText: TextView? = null
     private var detailPhantomButton: Button? = null
     private var detailPhaseButton: Button? = null
+    private var detailLinkButton: Button? = null
     private var detailHpFilterInButton: Button? = null
     private var detailLpFilterInButton: Button? = null
     private var detailHpFreqSeek: SeekBar? = null
@@ -2382,7 +2569,17 @@ class MainActivity : AppCompatActivity() {
             else -> return
         }
         knob.value = level
-        text.text = "%.2f".format(level)
+        text.text = if (kind == ParamKind.EQ_FREQ) {
+            val bandId = when (bandIndex) {
+                0 -> EqCurveView.BandId.BASS
+                1 -> EqCurveView.BandId.LOW_MID
+                2 -> EqCurveView.BandId.MID_HIGH
+                else -> EqCurveView.BandId.TREBLE
+            }
+            EqCurveView.formatHz(EqCurveView.rawToHzPublic(level, bandId))
+        } else {
+            "%.2f".format(level)
+        }
         if (kind == ParamKind.EQ_FREQ) views.graphView.bands.getOrNull(bandIndex)?.freq = level
         if (kind == ParamKind.EQ_GAIN) views.graphView.bands.getOrNull(bandIndex)?.gain = level
         if (kind == ParamKind.EQ_FREQ || kind == ParamKind.EQ_GAIN) views.graphView.invalidate()
@@ -2446,6 +2643,105 @@ class MainActivity : AppCompatActivity() {
      * под EQ/Sends позже), справа - ПОСТОЯННО видимые mute/solo/фейдер/метр,
      * чтобы уровень сигнала не терялся из виду, пока крутишь эффекты.
      */
+    /**
+     * Экран назначения участников VCA-группы. ВАЖНО: структура (какое имя
+     * параметра соответствует какому потенциальному участнику, и что
+     * числовой аргумент - это номер VCA-группы) взята из большого
+     * стороннего датасета (не из нашего собственного захвата трафика) - см.
+     * подробную заметку в Pro2Commands.kt у vcaChild*Address(). Отправка
+     * команд реализована (по той же toggle-логике, что и остальные
+     * enPPCSwitchMessage переключатели), а вот живой подписки на ТЕКУЩЕЕ
+     * состояние членства здесь пока нет - слишком много неопределённости
+     * сразу, чтобы делать полноценный live-экран. Проверяйте результат
+     * прямо на экране пульта.
+     */
+    private fun openVcaMembers(vcaIndex: Int) {
+        val view = LayoutInflater.from(this).inflate(R.layout.activity_vca_members, channelDetailContainer, false)
+        channelDetailContainer.removeAllViews()
+        channelDetailContainer.addView(view)
+        channelDetailContainer.visibility = android.view.View.VISIBLE
+
+        view.findViewById<TextView>(R.id.textVcaMembersTitle).text = "VCA ${vcaIndex + 1} MEMBERS"
+        view.findViewById<Button>(R.id.btnVcaMembersBack).setOnClickListener {
+            channelDetailContainer.visibility = android.view.View.GONE
+            channelDetailContainer.removeAllViews()
+        }
+
+        val container = view.findViewById<android.widget.LinearLayout>(R.id.containerVcaMembers)
+        container.removeAllViews()
+
+        fun sectionHeader(title: String) {
+            val header = TextView(this).apply {
+                text = title
+                setTextColor(Color.parseColor("#ff9f0a"))
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                textSize = 13f
+                setPadding(0, 20, 0, 8)
+            }
+            container.addView(header)
+        }
+
+        fun memberGrid(labels: List<String>, onToggle: (index: Int, member: Boolean) -> Unit) {
+            var row: android.widget.LinearLayout? = null
+            for ((i, label) in labels.withIndex()) {
+                if (i % 4 == 0) {
+                    row = android.widget.LinearLayout(this).apply {
+                        orientation = android.widget.LinearLayout.HORIZONTAL
+                    }
+                    container.addView(row, android.widget.LinearLayout.LayoutParams(
+                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = 6 })
+                }
+                var memberState = false
+                val btn = Button(this).apply {
+                    text = label
+                    textSize = 10f
+                    minHeight = 0
+                    backgroundTintList = null
+                    setPadding(4, 12, 4, 12)
+                    setTextColor(Color.parseColor("#ffffff"))
+                    setBackgroundColor(Color.parseColor("#3a3a3c"))
+                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                        .apply { marginEnd = 4 }
+                    setOnClickListener {
+                        memberState = !memberState
+                        setBackgroundColor(Color.parseColor(if (memberState) "#ff9f0a" else "#3a3a3c"))
+                        setTextColor(Color.parseColor(if (memberState) "#000000" else "#ffffff"))
+                        onToggle(i, memberState)
+                    }
+                }
+                row?.addView(btn)
+            }
+        }
+
+        sectionHeader("ВХОДНЫЕ КАНАЛЫ (1-56)")
+        memberGrid((1..56).map { "CH $it" }) { i, member ->
+            sendRawAsync(Pro2Commands.setVcaChildInput(i, vcaIndex, true))
+        }
+
+        sectionHeader("AUX-ШИНЫ (1-16)")
+        memberGrid((1..16).map { "BUS $it" }) { i, member ->
+            sendRawAsync(Pro2Commands.setVcaChildSubMix(i, vcaIndex, true))
+        }
+
+        sectionHeader("AUX RETURNS (1-8)")
+        memberGrid((1..8).map { "AUX $it" }) { i, member ->
+            sendRawAsync(Pro2Commands.setVcaChildAuxReturn(i, vcaIndex, true))
+        }
+
+        sectionHeader("MAIN OUTS (1-8)")
+        memberGrid((1..8).map { "MAIN $it" }) { i, member ->
+            sendRawAsync(Pro2Commands.setVcaChildMain(i, vcaIndex, true))
+        }
+
+        sectionHeader("МАСТЕР")
+        memberGrid(listOf("MASTER L", "MASTER R", "MASTER C")) { i, member ->
+            val letter = listOf("L", "R", "C")[i]
+            sendRawAsync(Pro2Commands.setVcaChildMaster(letter, vcaIndex, true))
+        }
+    }
+
     private fun openChannelDetail(channel: Int) {
         val ui = channels.getOrNull(channel) ?: return
         val view = LayoutInflater.from(this).inflate(R.layout.channel_detail, channelDetailContainer, false)
@@ -2474,6 +2770,7 @@ class MainActivity : AppCompatActivity() {
             detailGainTrimKnobRef = null
             detailGainTrimValueRef = null
             detailSoloBRef = null
+            detailLinkButton = null
             detailGateDynViews = null
         }
 
@@ -2483,6 +2780,7 @@ class MainActivity : AppCompatActivity() {
         val detailFader = view.findViewById<SeekBar>(R.id.detailFader)
         val detailFaderContainer = view.findViewById<android.widget.FrameLayout>(R.id.detailFaderContainer)
         val detailMeterBar = view.findViewById<android.view.View>(R.id.detailMeterBar)
+        setupMeterBarPivot(detailMeterBar)
         val detailLevelText = view.findViewById<TextView>(R.id.textDetailLevelValue)
 
         detailMute.backgroundTintList = null
@@ -2586,7 +2884,7 @@ class MainActivity : AppCompatActivity() {
             for (tab in listOf(tabInput, tabComp, tabSends, tabEq, tabGate)) {
                 val isActive = tab === active
                 tab.backgroundTintList = android.content.res.ColorStateList.valueOf(
-                    Color.parseColor(if (isActive) "#ff9f0a" else "#3a3a3c")
+                    Color.parseColor(if (isActive) "#ff9f0a" else "#1c1c1e")
                 )
                 tab.setTextColor(Color.parseColor(if (isActive) "#000000" else "#ffffff"))
             }
@@ -2630,8 +2928,21 @@ class MainActivity : AppCompatActivity() {
             gateBlock.visibility = android.view.View.VISIBLE
             selectTab(tabGate)
         }
-        tabInput.setOnClickListener { showInput() }
-        tabComp.setOnClickListener { showComp() }
+        tabInput.setOnClickListener {
+            showInput()
+            // Подписываемся на pan/48V/фазу/HP-LP/delay/SoloB этого канала
+            // только сейчас, при первом реальном открытии вкладки - не
+            // хотим подписывать все 56 каналов сразу при подключении
+            // (перегружало пульт настолько, что сбоил даже официальный
+            // Mixtender на другом устройстве).
+            subscribeInputExtras(channel)
+        }
+        tabComp.setOnClickListener {
+            showComp()
+            // Фильтр компрессора и GR/detector-метры (comp+gate) - тоже
+            // лениво, только при реальном открытии вкладки.
+            subscribeCompGateExtras(channel)
+        }
         tabSends.setOnClickListener {
             showSends()
             // Подписываемся на 16 aux-посылов этого канала только сейчас,
@@ -2649,8 +2960,10 @@ class MainActivity : AppCompatActivity() {
             showGate()
             // Подписываемся на Gate этого канала только сейчас (9 параметров).
             subscribeGate(channel)
+            subscribeCompGateExtras(channel)
         }
         showInput()
+        subscribeInputExtras(channel)
 
         // --- Вкладка SENDS: 16 посылов, таблица горизонтальных полос ---
         // НЕ подтверждено реальным захватом трафика - см. заметку в
@@ -2761,7 +3074,7 @@ class MainActivity : AppCompatActivity() {
                     val newState = !ConnectionHolder.channelData[channel].auxSendPreFade[bus - 1]
                     ConnectionHolder.channelData[channel].auxSendPreFade[bus - 1] = newState
                     text = if (newState) "PRE" else "POST"
-                    sendRawAsync(Pro2Commands.setSubSendPreFade(channel, bus, newState))
+                    sendRawAsync(Pro2Commands.setSubSendPreFade(channel, bus, true))
                 }
             }
             val btnEnable = Button(this).apply {
@@ -2781,7 +3094,7 @@ class MainActivity : AppCompatActivity() {
                     ConnectionHolder.channelData[channel].auxSendEnable[bus - 1] = newState
                     text = if (newState) "ON" else "OFF"
                     setBackgroundColor(Color.parseColor(if (newState) "#34c759" else "#3a3a3c"))
-                    sendRawAsync(Pro2Commands.setSubSendEnable(channel, bus, newState))
+                    sendRawAsync(Pro2Commands.setSubSendEnable(channel, bus, true))
                 }
             }
 
@@ -2858,6 +3171,20 @@ class MainActivity : AppCompatActivity() {
             btnPhase.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
             sendPhase(channel, newState)
         }
+
+        // Стерео-пара (link) - НЕ подтверждено реальным захватом (см. заметку в Pro2Commands.kt).
+        val btnLink = view.findViewById<Button>(R.id.btnDetailLink)
+        btnLink.backgroundTintList = null
+        btnLink.text = if (inputData.linkedLocal) "LINK ON" else "LINK OFF"
+        btnLink.setBackgroundColor(Color.parseColor(if (inputData.linkedLocal) "#ff9f0a" else "#3a3a3c"))
+        btnLink.setOnClickListener {
+            val newState = !ConnectionHolder.channelData[channel].linkedLocal
+            ConnectionHolder.channelData[channel].linkedLocal = newState
+            btnLink.text = if (newState) "LINK ON" else "LINK OFF"
+            btnLink.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+            sendRawAsync(Pro2Commands.setLink(channel, true))
+        }
+        detailLinkButton = btnLink
 
         val seekPan = view.findViewById<SeekBar>(R.id.seekDetailPan)
         val textPan = view.findViewById<TextView>(R.id.textDetailPanValue)
@@ -2937,7 +3264,7 @@ class MainActivity : AppCompatActivity() {
             ConnectionHolder.channelData[channel].hpFilterInLocal = newState
             btnHp.text = if (newState) "HP FILTER ON" else "HP FILTER OFF"
             btnHp.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
-            sendRawAsync(Pro2Commands.setHpFilterIn(channel, newState))
+            sendRawAsync(Pro2Commands.setHpFilterIn(channel, true))
         }
         detailHpFilterInButton = btnHp
 
@@ -2950,7 +3277,7 @@ class MainActivity : AppCompatActivity() {
             ConnectionHolder.channelData[channel].lpFilterInLocal = newState
             btnLp.text = if (newState) "LP FILTER ON" else "LP FILTER OFF"
             btnLp.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
-            sendRawAsync(Pro2Commands.setLpFilterIn(channel, newState))
+            sendRawAsync(Pro2Commands.setLpFilterIn(channel, true))
         }
         detailLpFilterInButton = btnLp
 
@@ -3102,7 +3429,7 @@ class MainActivity : AppCompatActivity() {
                 setBackgroundColor(Color.parseColor(if (newState) "#34c759" else "#3a3a3c"))
                 graph.hpOn = newState
                 graph.invalidate()
-                sendRawAsync(Pro2Commands.setHpFilterIn(channel, newState))
+                sendRawAsync(Pro2Commands.setHpFilterIn(channel, true))
             }
         }
         val lpButton = Button(this).apply {
@@ -3120,7 +3447,7 @@ class MainActivity : AppCompatActivity() {
                 setBackgroundColor(Color.parseColor(if (newState) "#af52de" else "#3a3a3c"))
                 graph.lpOn = newState
                 graph.invalidate()
-                sendRawAsync(Pro2Commands.setLpFilterIn(channel, newState))
+                sendRawAsync(Pro2Commands.setLpFilterIn(channel, true))
             }
         }
         hpLpRow.addView(hpButton)
@@ -3247,14 +3574,27 @@ class MainActivity : AppCompatActivity() {
                         (52 * resources.displayMetrics.density).toInt()
                     ).apply { topMargin = 4; bottomMargin = 4 }
                 }
+                // Для FREQ теперь показываем реальные Гц (подтверждено
+                // приблизительно по фото экрана пульта - см. заметку в
+                // EqCurveView.kt про bandHzRange). GAIN/WIDTH остаются
+                // сырым числом - для них калибровки нет.
+                val eqBandId = when (bandIndex) {
+                    0 -> EqCurveView.BandId.BASS
+                    1 -> EqCurveView.BandId.LOW_MID
+                    2 -> EqCurveView.BandId.MID_HIGH
+                    else -> EqCurveView.BandId.TREBLE
+                }
+                fun formatValue(v: Float): String =
+                    if (kind == ParamKind.EQ_FREQ) EqCurveView.formatHz(EqCurveView.rawToHzPublic(v, eqBandId))
+                    else "%.2f".format(v)
                 val valueText = TextView(this).apply {
-                    text = "%.2f".format(initial)
+                    text = formatValue(initial)
                     setTextColor(Color.parseColor("#aaaaaa"))
                     textSize = 10f
                 }
                 var lastSend = 0L
                 knob.onValueChanged = { v ->
-                    valueText.text = "%.2f".format(v)
+                    valueText.text = formatValue(v)
                     persistEq(channel, bandIndex, kind, v)
                     if (kind == ParamKind.EQ_FREQ) { graph.bands[bandIndex].freq = v; graph.invalidate() }
                     if (kind == ParamKind.EQ_GAIN) { graph.bands[bandIndex].gain = v; graph.invalidate() }
@@ -3471,7 +3811,7 @@ class MainActivity : AppCompatActivity() {
                     d.compFiltersInLocal = newState
                     text = if (newState) "FILTER ON" else "FILTER OFF"
                     setBackgroundColor(Color.parseColor(if (newState) accentHex else "#3a3a3c"))
-                    sendRawAsync(Pro2Commands.setCompFiltersIn(channel, newState))
+                    sendRawAsync(Pro2Commands.setCompFiltersIn(channel, true))
                 }
             }
         }
@@ -3718,11 +4058,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun sendPhantomPower(channelIndex: Int, on: Boolean) {
-        sendRawAsync(Pro2Commands.setPhantomPower(channelIndex, on))
+        // ВАЖНО: как и mute/solo/compIn - это TOGGLE-параметр на пульте
+        // (любой полученный пакет переключает состояние, независимо от
+        // значения). Раньше здесь отправлялось явное on/off, и пульт,
+        // судя по всему, игнорировал пакеты со значением 0 - отсюда баг
+        // "включается, но не выключается". Теперь всегда шлём "включить",
+        // а направление контролирует локальное состояние + push с пульта.
+        sendRawAsync(Pro2Commands.setPhantomPower(channelIndex, true))
     }
 
     private fun sendPhase(channelIndex: Int, inverted: Boolean) {
-        sendRawAsync(Pro2Commands.setPhase(channelIndex, inverted))
+        sendRawAsync(Pro2Commands.setPhase(channelIndex, true))
     }
 
     private fun sendChannelName(channelIndex: Int, name: String) {
@@ -3734,11 +4080,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun sendGateIn(channelIndex: Int, on: Boolean) {
-        sendRawAsync(Pro2Commands.setGateIn(channelIndex, on))
+        sendRawAsync(Pro2Commands.setGateIn(channelIndex, true))
     }
 
     private fun sendGateFiltersIn(channelIndex: Int, on: Boolean) {
-        sendRawAsync(Pro2Commands.setGateFiltersIn(channelIndex, on))
+        sendRawAsync(Pro2Commands.setGateFiltersIn(channelIndex, true))
     }
 
     private fun sendGateParam(channelIndex: Int, kind: ParamKind, level: Float) {
@@ -4098,6 +4444,7 @@ class MainActivity : AppCompatActivity() {
             detailGainTrimKnobRef = null
             detailGainTrimValueRef = null
             detailSoloBRef = null
+            detailLinkButton = null
             detailGateDynViews = null
             return
         }

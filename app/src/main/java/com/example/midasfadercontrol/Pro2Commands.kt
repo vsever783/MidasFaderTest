@@ -62,6 +62,9 @@ object Pro2Commands {
     // Вторая шина solo - ПОДТВЕРЖДЕНО реальным трафиком (есть даже у
     // обычных каналов, не только у мастера/aux/шин).
     fun soloBAddress() = "/enPPCSwitchMessage/$GROUP/enFaderSoloB"
+    // Стерео-пара (link) - НЕ подтверждено реальным захватом (из большого
+    // датасета midas-pro-mcp-server, brute-force реверс-инжиниринг).
+    fun linkAddress() = "/enPPCSwitchMessage/$GROUP/enRoutingLinked"
     // ПОДТВЕРЖДЕНО реальным трафиком Mixtender 2 (перехват "TRIM" ручки на канале 32):
     // адрес enInputGain НЕ используется приложением для этой ручки вообще -
     // реально используется enMicSplitStepGain. Обозначение в JSON-файле muffeeee
@@ -146,6 +149,9 @@ object Pro2Commands {
 
     fun setSoloB(channelIndex: Int, soloed: Boolean): ByteArray =
         OscUtil.encode(soloBAddress(), listOf(channelIndex, if (soloed) 1 else 0))
+
+    fun setLink(channelIndex: Int, linked: Boolean): ByteArray =
+        OscUtil.encode(linkAddress(), listOf(channelIndex, if (linked) 1 else 0))
 
     fun setGain(channelIndex: Int, level: Float): ByteArray =
         OscUtil.encode(gainAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
@@ -464,8 +470,36 @@ object Pro2Commands {
     fun vcaNameAddress() = "/enPPCStringMessage/$VCA_GROUP/enPathname"
     fun vcaColourAddress() = "/enPPCIntegerMessage/$VCA_GROUP/enChannelColour"
 
+    // === Назначение каналов в VCA-группы - НЕ подтверждено реальным
+    // захватом (структура взята из большого стороннего датасета
+    // midas-pro-mcp-server, brute-force реверс-инжиниринг), НО структура
+    // симметрична с mute-группами (см. muteGroupChild*Address ниже) и
+    // объясняет то, что мы видели в собственном захвате (индекс аргумента
+    // - это номер VCA-группы 0..7, а не что-то другое). Имя параметра
+    // определяет КОГО назначаем, числовой аргумент - В КАКУЮ группу. ===
+    fun vcaChildInputAddress(inputIndex: Int) = "/enPPCSwitchMessage/$VCA_GROUP/enVCAChildInput${inputIndex + 1}"
+    fun vcaChildSubMixAddress(busIndex: Int) = "/enPPCSwitchMessage/$VCA_GROUP/enVCAChildSubMix${busIndex + 1}"
+    fun vcaChildAuxReturnAddress(auxIndex: Int) = "/enPPCSwitchMessage/$VCA_GROUP/enVCAChildAuxReturn${auxIndex + 1}"
+    fun vcaChildMainAddress(mainIndex: Int) = "/enPPCSwitchMessage/$VCA_GROUP/enVCAChildMain${mainIndex + 1}"
+    fun vcaChildMasterAddress(letter: String) = "/enPPCSwitchMessage/$VCA_GROUP/enVCAChildMaster$letter"
+
     fun setVcaFader(vcaIndex: Int, level: Float): ByteArray =
         OscUtil.encode(vcaFaderAddress(), listOf(vcaIndex, level.coerceIn(0f, 1f)))
+
+    fun setVcaChildInput(inputIndex: Int, vcaIndex: Int, member: Boolean): ByteArray =
+        OscUtil.encode(vcaChildInputAddress(inputIndex), listOf(vcaIndex, if (member) 1 else 0))
+
+    fun setVcaChildSubMix(busIndex: Int, vcaIndex: Int, member: Boolean): ByteArray =
+        OscUtil.encode(vcaChildSubMixAddress(busIndex), listOf(vcaIndex, if (member) 1 else 0))
+
+    fun setVcaChildAuxReturn(auxIndex: Int, vcaIndex: Int, member: Boolean): ByteArray =
+        OscUtil.encode(vcaChildAuxReturnAddress(auxIndex), listOf(vcaIndex, if (member) 1 else 0))
+
+    fun setVcaChildMain(mainIndex: Int, vcaIndex: Int, member: Boolean): ByteArray =
+        OscUtil.encode(vcaChildMainAddress(mainIndex), listOf(vcaIndex, if (member) 1 else 0))
+
+    fun setVcaChildMaster(letter: String, vcaIndex: Int, member: Boolean): ByteArray =
+        OscUtil.encode(vcaChildMasterAddress(letter), listOf(vcaIndex, if (member) 1 else 0))
 
     fun setVcaMute(vcaIndex: Int, muted: Boolean): ByteArray =
         OscUtil.encode(vcaMuteAddress(), listOf(vcaIndex, if (muted) 1 else 0))

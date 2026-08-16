@@ -49,57 +49,104 @@
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:padding="8dp">
+        android:orientation="horizontal">
 
         <Button
             android:id="@+id/btnTabInput"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
             android:text="INPUT"
             android:textColor="#000000"
             android:textStyle="bold"
-            android:backgroundTint="#ff9f0a"
-            android:layout_marginEnd="8dp" />
+            android:background="@android:color/transparent"
+            android:backgroundTint="#ff9f0a" />
+
+        <!-- Тонкий разделитель вместо промежутка между кнопками - единая
+             полоса вкладок, а не отдельные кнопки с зазорами. -->
+        <View
+            android:layout_width="1dp"
+            android:layout_height="match_parent"
+            android:background="#3a3a3c" />
 
         <Button
             android:id="@+id/btnTabComp"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
             android:text="COMP"
             android:textColor="#ffffff"
             android:textStyle="bold"
-            android:backgroundTint="#3a3a3c"
-            android:layout_marginEnd="8dp" />
+            android:background="@android:color/transparent"
+            android:backgroundTint="#1c1c1e" />
+
+        <View
+            android:layout_width="1dp"
+            android:layout_height="match_parent"
+            android:background="#3a3a3c" />
 
         <Button
             android:id="@+id/btnTabSends"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
             android:text="SENDS"
             android:textColor="#ffffff"
             android:textStyle="bold"
-            android:backgroundTint="#3a3a3c"
-            android:layout_marginEnd="8dp" />
+            android:background="@android:color/transparent"
+            android:backgroundTint="#1c1c1e" />
+
+        <View
+            android:layout_width="1dp"
+            android:layout_height="match_parent"
+            android:background="#3a3a3c" />
 
         <Button
             android:id="@+id/btnTabEq"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
             android:text="EQ"
             android:textColor="#ffffff"
             android:textStyle="bold"
-            android:backgroundTint="#3a3a3c"
-            android:layout_marginEnd="8dp" />
+            android:background="@android:color/transparent"
+            android:backgroundTint="#1c1c1e" />
+
+        <View
+            android:layout_width="1dp"
+            android:layout_height="match_parent"
+            android:background="#3a3a3c" />
 
         <Button
             android:id="@+id/btnTabGate"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
             android:text="GATE"
             android:textColor="#ffffff"
             android:textStyle="bold"
-            android:backgroundTint="#3a3a3c" />
+            android:background="@android:color/transparent"
+            android:backgroundTint="#1c1c1e" />
     </LinearLayout>
     </HorizontalScrollView>
 
@@ -239,6 +286,18 @@
                         android:textColor="#ffffff"
                         android:backgroundTint="#3a3a3c" />
                 </LinearLayout>
+
+                <!-- Стерео-пара (link) - НЕ подтверждено реальным захватом. -->
+                <Button
+                    android:id="@+id/btnDetailLink"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="LINK OFF"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#ffffff"
+                    android:backgroundTint="#3a3a3c" />
 
                 <!-- Панорама - ПОДТВЕРЖДЕНО реальным захватом. -->
                 <TextView
@@ -506,9 +565,10 @@
                     <View
                         android:id="@+id/detailMeterBar"
                         android:layout_width="match_parent"
-                        android:layout_height="0dp"
+                        android:layout_height="match_parent"
                         android:layout_gravity="bottom"
-                        android:background="#34c759" />
+                        android:background="#34c759"
+                        android:scaleY="0" />
                 </FrameLayout>
 
                 <FrameLayout
