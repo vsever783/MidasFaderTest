@@ -121,7 +121,6 @@ object Pro2Commands {
     fun gateGrMeterAddress() = "/enPPCMeterMessage/$GROUP/enExpGRMeter"
     // Detector-метры - входной сигнал ДО обработки (в отличие от GR -
     // снижение усиления). ПОДТВЕРЖДЕНО реальным трафиком iPad.
-    fun compDetMeterAddress() = "/enPPCMeterMessage/$GROUP/enCompDetMeter"
     fun gateDetMeterAddress() = "/enPPCMeterMessage/$GROUP/enGateDetMeter"
 
     // === Компрессор/лимитер - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным трафиком
@@ -137,6 +136,14 @@ object Pro2Commands {
     // Фильтр компрессора - ПОДТВЕРЖДЕНО тем же захватом.
     fun compFiltersInAddress() = "/enPPCSwitchMessage/$GROUP/enCompLimFiltersIn"
     fun compFilterFreqAddress() = "/enPPCRotaryMessage/$GROUP/enCompLimFilterFrequency"
+    fun compDetMeterAddress() = "/enPPCMeterMessage/$GROUP/enCompDetMeter"
+    // Режим компрессора (например "винтаж") - ПОДТВЕРЖДЕНО реальным
+    // захватом (значения 1 и 3 замечены). НЕ ЗНАЕМ, как отправлять SET -
+    // смена наблюдалась только когда её делали прямо на экране пульта,
+    // поэтому только для чтения (read-only).
+    fun compDetectorModeAddress() = "/enPPCIntegerMessage/$GROUP/enCompDetectorMode"
+    // Режим gate (например "Gate" по умолчанию) - тот же случай, только чтение.
+    fun gateModeAddress() = "/enPPCIntegerMessage/$GROUP/enGateMode"
 
     fun setFader(channelIndex: Int, level: Float): ByteArray =
         OscUtil.encode(faderAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))

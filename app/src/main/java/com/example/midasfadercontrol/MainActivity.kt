@@ -41,7 +41,7 @@ import java.nio.ByteBuffer
  *     which ones are confirmed vs. best-effort based on the address list.
  */
 // === Живая подписка на пульт (см. Pro2Commands.batchSubscribe) ===
-enum class ParamKind { FADER, MUTE, SOLO, SOLO_B, LINK, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, COMP_DET_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, EQ_SHAPE_BASS, EQ_SHAPE_TREBLE, PAN, PHANTOM, PHASE, GAIN_TRIM, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER, GATE_DET_METER }
+enum class ParamKind { FADER, MUTE, SOLO, SOLO_B, LINK, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, COMP_DET_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, EQ_SHAPE_BASS, EQ_SHAPE_TREBLE, PAN, PHANTOM, PHASE, GAIN_TRIM, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER, GATE_DET_METER, COMP_MODE, GATE_MODE }
 // Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX ШИНЫ, MASTER - мастер намеренно
 // в конце (по просьбе - обычно с ним работают реже всего).
 enum class StripMode { CHANNELS, AUX_RETURNS, AUX_BUS, VCA, MASTER }
@@ -96,6 +96,10 @@ data class ChannelData(
     var gateGrMeter: Float = 0f,
     var compDetMeter: Float = 0f,
     var gateDetMeter: Float = 0f,
+    // Режим компрессора/gate - ПОДТВЕРЖДЕНО реальным захватом, только
+    // чтение (не знаем, как отправлять SET - см. заметку в Pro2Commands.kt).
+    var compMode: Int = -1,
+    var gateMode: Int = -1,
     var soloBLocal: Boolean = false,
     var linkedLocal: Boolean = false,
     var eqBassShelf: Boolean = false,
@@ -165,6 +169,15 @@ object ConnectionHolder {
     // обратно на банк 1-8 / режим "каналы".
     var uiBankStart: Int = 0
     var uiStripMode: StripMode = StripMode.CHANNELS
+    // ВАЖНО (исправление сброса при повороте): раньше "какой канал открыт
+    // в детальном экране" и "какая там вкладка" хранились ПРЯМО в
+    // MainActivity как обычные поля - а при повороте экрана Android
+    // ПОЛНОСТЬЮ пересоздаёт активность (подтверждено логом - разные хеши
+    // окна ДО и ПОСЛЕ поворота), и такие поля сбрасываются в null/по
+    // умолчанию. Теперь - как и uiBankStart/uiStripMode - хранятся здесь,
+    // в ConnectionHolder, который переживает пересоздание активности.
+    var openDetailChannel: Int? = null
+    var openDetailTabName: String = "INPUT"
     // Режим приложения (инженер/монитор) и выбранная шина монитора -
     // тоже переживают поворот экрана.
     var uiAppMode: String = "engineer"
@@ -1127,6 +1140,18 @@ class MainActivity : AppCompatActivity() {
         )
 
         switchStripMode(ConnectionHolder.uiStripMode)
+
+        // ВАЖНО (исправление сброса при повороте экрана): если детальный
+        // экран канала был открыт ДО поворота (пересоздания активности) -
+        // переоткрываем его автоматически, на той же вкладке, что и была
+        // (данные пережили пересоздание в ConnectionHolder, но сам ЭКРАН
+        // без этого вызова остался бы закрытым - активность просто
+        // построила бы заново обычный список каналов).
+        ConnectionHolder.openDetailChannel?.let { ch ->
+            if (ch in 0 until numChannels) {
+                openChannelDetail(ch)
+            }
+        }
     }
 
     private var modeButtons: Map<StripMode, Button> = emptyMap()
@@ -1755,6 +1780,8 @@ class MainActivity : AppCompatActivity() {
                 "/h_${sid}_${channel}_compfltfreq" to Triple(Pro2Commands.compFilterFreqAddress(), ParamKind.COMP_FILTER_FREQ, channel),
                 "/h_${sid}_${channel}_gategr" to Triple(Pro2Commands.gateGrMeterAddress(), ParamKind.GATE_GR_METER, channel),
                 "/h_${sid}_${channel}_gatedet" to Triple(Pro2Commands.gateDetMeterAddress(), ParamKind.GATE_DET_METER, channel),
+                "/h_${sid}_${channel}_compmode" to Triple(Pro2Commands.compDetectorModeAddress(), ParamKind.COMP_MODE, channel),
+                "/h_${sid}_${channel}_gatemode" to Triple(Pro2Commands.gateModeAddress(), ParamKind.GATE_MODE, channel),
             )
             withContext(Dispatchers.Main) {
                 for ((handle, info) in subs) subscriptions[handle] = Subscription(info.third, info.second)
@@ -2081,6 +2108,24 @@ class MainActivity : AppCompatActivity() {
                     ConnectionHolder.channelData[sub.channel].gateDetMeter = level
                     if (openDetailChannel == sub.channel) {
                         detailGateDynViews?.detText?.text = "IN %.1f".format(level * 60f - 60f)
+                    }
+                }
+            }
+            ParamKind.COMP_MODE -> {
+                if (blob.size >= 4) {
+                    val mode = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+                    ConnectionHolder.channelData[sub.channel].compMode = mode
+                    if (openDetailChannel == sub.channel) {
+                        detailCompDynViews?.modeText?.text = "MODE: $mode"
+                    }
+                }
+            }
+            ParamKind.GATE_MODE -> {
+                if (blob.size >= 4) {
+                    val mode = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+                    ConnectionHolder.channelData[sub.channel].gateMode = mode
+                    if (openDetailChannel == sub.channel) {
+                        detailGateDynViews?.modeText?.text = "MODE: $mode"
                     }
                 }
             }
@@ -2422,7 +2467,11 @@ class MainActivity : AppCompatActivity() {
     // пока экран открыт (то же самое, что раньше делал модальный диалог, но
     // теперь fader/mute/solo/метр остаются видны одновременно с компрессором,
     // как в Mixing Station).
-    private var openDetailChannel: Int? = null
+    // Проксируем в ConnectionHolder, чтобы значение переживало пересоздание
+    // активности при повороте экрана (см. заметку в ConnectionHolder).
+    private var openDetailChannel: Int?
+        get() = ConnectionHolder.openDetailChannel
+        set(value) { ConnectionHolder.openDetailChannel = value }
     private var detailViews: ChannelDetailViews? = null
     // Ссылки на 16 пар (ползунок, текст) вкладки SENDS детального экрана,
     // пока он открыт - для живого обновления от push.
@@ -2470,7 +2519,8 @@ class MainActivity : AppCompatActivity() {
         val thresholdKind: ParamKind,
         val ratioOrRangeKind: ParamKind,
         val grText: TextView,
-        val detText: TextView
+        val detText: TextView,
+        val modeText: TextView
     )
     private var detailCompDynViews: DynamicsBlockViews? = null
     private var detailGateDynViews: DynamicsBlockViews? = null
@@ -2569,16 +2619,18 @@ class MainActivity : AppCompatActivity() {
             else -> return
         }
         knob.value = level
-        text.text = if (kind == ParamKind.EQ_FREQ) {
-            val bandId = when (bandIndex) {
-                0 -> EqCurveView.BandId.BASS
-                1 -> EqCurveView.BandId.LOW_MID
-                2 -> EqCurveView.BandId.MID_HIGH
-                else -> EqCurveView.BandId.TREBLE
+        text.text = when (kind) {
+            ParamKind.EQ_FREQ -> {
+                val bandId = when (bandIndex) {
+                    0 -> EqCurveView.BandId.BASS
+                    1 -> EqCurveView.BandId.LOW_MID
+                    2 -> EqCurveView.BandId.MID_HIGH
+                    else -> EqCurveView.BandId.TREBLE
+                }
+                EqCurveView.formatHz(EqCurveView.rawToHzPublic(level, bandId))
             }
-            EqCurveView.formatHz(EqCurveView.rawToHzPublic(level, bandId))
-        } else {
-            "%.2f".format(level)
+            ParamKind.EQ_WIDTH -> EqCurveView.formatWidth(EqCurveView.rawToWidthPublic(level))
+            else -> "%.2f".format(level)
         }
         if (kind == ParamKind.EQ_FREQ) views.graphView.bands.getOrNull(bandIndex)?.freq = level
         if (kind == ParamKind.EQ_GAIN) views.graphView.bands.getOrNull(bandIndex)?.gain = level
@@ -2858,6 +2910,9 @@ class MainActivity : AppCompatActivity() {
             }
         )
 
+        // ВАЖНО: запоминаем ДО перезаписи ниже - иначе проверка всегда
+        // будет "истина" (мы же сами через строчку это поле и перезапишем).
+        val wasThisChannelAlreadyOpen = ConnectionHolder.openDetailChannel == channel
         openDetailChannel = channel
         val detailGainKnob = view.findViewById<RotaryKnobView>(R.id.knobDetailGain)
         val detailGainValue = view.findViewById<TextView>(R.id.textDetailGainValue)
@@ -2930,6 +2985,7 @@ class MainActivity : AppCompatActivity() {
         }
         tabInput.setOnClickListener {
             showInput()
+            ConnectionHolder.openDetailTabName = "INPUT"
             // Подписываемся на pan/48V/фазу/HP-LP/delay/SoloB этого канала
             // только сейчас, при первом реальном открытии вкладки - не
             // хотим подписывать все 56 каналов сразу при подключении
@@ -2939,18 +2995,21 @@ class MainActivity : AppCompatActivity() {
         }
         tabComp.setOnClickListener {
             showComp()
+            ConnectionHolder.openDetailTabName = "COMP"
             // Фильтр компрессора и GR/detector-метры (comp+gate) - тоже
             // лениво, только при реальном открытии вкладки.
             subscribeCompGateExtras(channel)
         }
         tabSends.setOnClickListener {
             showSends()
+            ConnectionHolder.openDetailTabName = "SENDS"
             // Подписываемся на 16 aux-посылов этого канала только сейчас,
             // при первом реальном открытии вкладки (см. subscribeAuxSends).
             subscribeAuxSends(channel)
         }
         tabEq.setOnClickListener {
             showEq()
+            ConnectionHolder.openDetailTabName = "EQ"
             // Подписываемся на EQ этого канала только сейчас (17 параметров
             // на канал - как и с посылами, не хотим подписывать все 56
             // каналов сразу при подключении).
@@ -2958,11 +3017,23 @@ class MainActivity : AppCompatActivity() {
         }
         tabGate.setOnClickListener {
             showGate()
+            ConnectionHolder.openDetailTabName = "GATE"
             // Подписываемся на Gate этого канала только сейчас (9 параметров).
             subscribeGate(channel)
             subscribeCompGateExtras(channel)
         }
-        showInput()
+        // ВАЖНО (восстановление после поворота экрана): если ConnectionHolder
+        // помнит, что для ЭТОГО канала была открыта не INPUT, а другая
+        // вкладка (например EQ) - открываем сразу её и лениво подписываемся
+        // на её параметры, а не всегда откатываемся на INPUT по умолчанию.
+        when (if (wasThisChannelAlreadyOpen) ConnectionHolder.openDetailTabName else "INPUT") {
+            "COMP" -> { showComp(); subscribeCompGateExtras(channel) }
+            "GATE" -> { showGate(); subscribeGate(channel); subscribeCompGateExtras(channel) }
+            "EQ" -> { showEq(); subscribeEq(channel) }
+            "SENDS" -> { showSends(); subscribeAuxSends(channel) }
+            else -> showInput()
+        }
+
         subscribeInputExtras(channel)
 
         // --- Вкладка SENDS: 16 посылов, таблица горизонтальных полос ---
@@ -3584,9 +3655,11 @@ class MainActivity : AppCompatActivity() {
                     2 -> EqCurveView.BandId.MID_HIGH
                     else -> EqCurveView.BandId.TREBLE
                 }
-                fun formatValue(v: Float): String =
-                    if (kind == ParamKind.EQ_FREQ) EqCurveView.formatHz(EqCurveView.rawToHzPublic(v, eqBandId))
-                    else "%.2f".format(v)
+                fun formatValue(v: Float): String = when (kind) {
+                    ParamKind.EQ_FREQ -> EqCurveView.formatHz(EqCurveView.rawToHzPublic(v, eqBandId))
+                    ParamKind.EQ_WIDTH -> EqCurveView.formatWidth(EqCurveView.rawToWidthPublic(v))
+                    else -> "%.2f".format(v)
+                }
                 val valueText = TextView(this).apply {
                     text = formatValue(initial)
                     setTextColor(Color.parseColor("#aaaaaa"))
@@ -3707,7 +3780,20 @@ class MainActivity : AppCompatActivity() {
         container.addView(header, android.widget.LinearLayout.LayoutParams(
             android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
             android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = 12 })
+        ).apply { bottomMargin = 4 })
+
+        // Режим (компрессор/gate) - ТОЛЬКО ЧТЕНИЕ, не знаем формат SET
+        // (менялось прямо на экране пульта в захвате, см. заметку в
+        // Pro2Commands.kt). Показываем как текст под заголовком.
+        val modeText = TextView(this).apply {
+            text = "MODE: —"
+            setTextColor(Color.parseColor("#8e8e93"))
+            textSize = 11f
+        }
+        container.addView(modeText, android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = 8 })
 
         // --- График передаточной функции ---
         val graph = TransferCurveView(this).apply {
@@ -3817,7 +3903,7 @@ class MainActivity : AppCompatActivity() {
         }
         container.addView(filtersInButton)
 
-        val views = DynamicsBlockViews(inButton, graph, knobViews, filtersInButton, thresholdKind, ratioOrRangeKind, grText, detText)
+        val views = DynamicsBlockViews(inButton, graph, knobViews, filtersInButton, thresholdKind, ratioOrRangeKind, grText, detText, modeText)
         if (isGate) detailGateDynViews = views else detailCompDynViews = views
     }
 

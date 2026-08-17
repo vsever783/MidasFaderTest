@@ -39,8 +39,8 @@ class EqCurveView @JvmOverloads constructor(
         private val bandHzRangeStatic = mapOf(
             BandId.BASS to (16f to 400f),
             BandId.LOW_MID to (80f to 2000f),
-            BandId.MID_HIGH to (320f to 8000f),
-            BandId.TREBLE to (3000f to 25000f)
+            BandId.MID_HIGH to (350f to 8000f),
+            BandId.TREBLE to (1000f to 25000f)
         )
 
         /** Сырое значение ручки 0..1 -> реальные Гц для конкретной полосы (для подписей вне графика). */
@@ -48,6 +48,18 @@ class EqCurveView @JvmOverloads constructor(
             val (minHz, maxHz) = bandHzRangeStatic.getValue(band)
             return exp(ln(minHz) + raw.coerceIn(0f, 1f) * (ln(maxHz) - ln(minHz)))
         }
+
+        // WIDTH (добротность полосы) - подтверждено реальным диапазоном
+        // 0.1-3.0 (из заметок при тестировании на пульте), но САМА форма
+        // зависимости (линейная/логарифмическая) не подтверждена - берём
+        // простую линейную интерполяцию как разумное предположение по
+        // умолчанию.
+        private const val widthMin = 0.1f
+        private const val widthMax = 3.0f
+
+        fun rawToWidthPublic(raw: Float): Float = widthMin + raw.coerceIn(0f, 1f) * (widthMax - widthMin)
+
+        fun formatWidth(width: Float): String = "%.2f".format(width)
 
         /** Аккуратное форматирование Гц для подписи ("84 Hz" / "1.2 kHz"). */
         fun formatHz(hz: Float): String =
@@ -64,8 +76,8 @@ class EqCurveView @JvmOverloads constructor(
     private val bandHzRange = mapOf(
         BandId.BASS to (16f to 400f),
         BandId.LOW_MID to (80f to 2000f),
-        BandId.MID_HIGH to (320f to 8000f),
-        BandId.TREBLE to (3000f to 25000f)
+        BandId.MID_HIGH to (350f to 8000f),
+        BandId.TREBLE to (1000f to 25000f)
     )
     private val bandOrder = listOf(BandId.BASS, BandId.LOW_MID, BandId.MID_HIGH, BandId.TREBLE)
 
