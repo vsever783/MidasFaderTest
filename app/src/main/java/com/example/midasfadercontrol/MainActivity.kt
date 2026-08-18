@@ -23,208 +23,6 @@ import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 
-/**
- * Multi-channel mixer-style test screen for the Midas Pro2/PPC protocol.
- *
- * SAFETY: only connect to a console that is NOT live / not in a show.
- * UDP commands here can move real faders on a real console immediately.
- *
- * Protocol notes:
- *   - Transport: raw OSC over UDP. We send FROM local port 10001 TO the
- *     console's port 10000 - the console replies (and pushes state) to
- *     port 10001 specifically, not to whatever ephemeral port sent the
- *     request, so binding to 10001 locally is required to receive anything.
- *   - Channel indices are 0-based (index 0 = physical channel 1). The UI
- *     always shows/accepts the 1-based number people actually see on the
- *     console; conversion happens right before building any packet.
- *   - See Pro2Commands.kt for the specific addresses/types, with notes on
- *     which ones are confirmed vs. best-effort based on the address list.
- */
-// === Живая подписка на пульт (см. Pro2Commands.batchSubscribe) ===
-enum class ParamKind { FADER, MUTE, SOLO, SOLO_B, LINK, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, COMP_DET_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, EQ_SHAPE_BASS, EQ_SHAPE_TREBLE, PAN, PHANTOM, PHASE, GAIN_TRIM, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER, GATE_DET_METER, COMP_MODE, GATE_MODE }
-// Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX ШИНЫ, MASTER - мастер намеренно
-// в конце (по просьбе - обычно с ним работают реже всего).
-enum class StripMode { CHANNELS, AUX_RETURNS, AUX_BUS, VCA, MASTER }
-data class Subscription(val channel: Int, val kind: ParamKind, val auxBus: Int = 0, val eqBand: Int = 0)
-
-/** Последние известные значения одного канала - переживают поворот экрана (см. ConnectionHolder). */
-data class ChannelData(
-    var fader: Float = 0f,
-    var mutedLocal: Boolean = false,
-    var soloed: Boolean = false,
-    var gain: Float = 0f,
-    var name: String = "",
-    var colourArgb: Int? = null,
-    var compRatio: Float = 0f,
-    var compAttack: Float = 0f,
-    var compRelease: Float = 0f,
-    var compThreshold: Float = 0f,
-    var compMakeup: Float = 0f,
-    var compInLocal: Boolean = false,
-    var compFiltersInLocal: Boolean = false,
-    var compFilterFreq: Float = 0f,
-    // Посылы на 16 aux-шин (индекс 0 = aux 1, ... индекс 15 = aux 16).
-    // НЕ подтверждено реальным захватом - см. заметку в Pro2Commands.
-    val auxSends: FloatArray = FloatArray(16),
-    // EQ (4 полосы: 0=bass, 1=low-mid, 2=mid-high, 3=treble) - подтверждено
-    // описаниями в списке команд, но НЕ реальным захватом.
-    var eqInLocal: Boolean = false,
-    val eqBandActiveLocal: BooleanArray = BooleanArray(4),
-    val eqFreq: FloatArray = FloatArray(4),
-    val eqGain: FloatArray = FloatArray(4),
-    val eqWidth: FloatArray = FloatArray(4),
-    // Вход (INPUT) - pan/phantom ПОДТВЕРЖДЕНЫ реальным захватом, phase - по
-    // описанию в списке команд.
-    var pan: Float = 0.5f,
-    // Основной GAIN (enInputGain) хранится в поле gain выше. Это - GAIN
-    // TRIM (enMicSplitStepGain) - раньше мы по ошибке называли gain TRIM'ом,
-    // теперь они разделены правильно.
-    var gainTrim: Float = 0f,
-    var phantomLocal: Boolean = false,
-    var phaseLocal: Boolean = false,
-    // Gate - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным захватом трафика iPad.
-    var gateInLocal: Boolean = false,
-    var gateThreshold: Float = 0f,
-    var gateRange: Float = 0f,
-    var gateAttack: Float = 0f,
-    var gateHold: Float = 0f,
-    var gateRelease: Float = 0f,
-    var gateTransient: Float = 0f,
-    var gateFilterFreq: Float = 0f,
-    var gateFiltersInLocal: Boolean = false,
-    var compGrMeter: Float = 0f,
-    var gateGrMeter: Float = 0f,
-    var compDetMeter: Float = 0f,
-    var gateDetMeter: Float = 0f,
-    // Режим компрессора/gate - ПОДТВЕРЖДЕНО реальным захватом, только
-    // чтение (не знаем, как отправлять SET - см. заметку в Pro2Commands.kt).
-    var compMode: Int = -1,
-    var gateMode: Int = -1,
-    var soloBLocal: Boolean = false,
-    var linkedLocal: Boolean = false,
-    var eqBassShelf: Boolean = false,
-    var eqTrebleShelf: Boolean = false,
-    // HP/LP фильтры и задержка входа - ПОДТВЕРЖДЕНО реальным захватом.
-    var hpFilterInLocal: Boolean = false,
-    var hpFilterFreq: Float = 0f,
-    var lpFilterInLocal: Boolean = false,
-    var lpFilterFreq: Float = 0f,
-    var inputDelay: Float = 0f,
-    // Отдельно от уровня посыла - вкл/выкл и pre/post для каждой из 16 шин.
-    val auxSendEnable: BooleanArray = BooleanArray(16) { true },
-    val auxSendPreFade: BooleanArray = BooleanArray(16)
-)
-
-/** Состояние одного мастер-канала - НЕ подтверждено реальным захватом. */
-data class MasterData(
-    var fader: Float = 0f,
-    var mutedLocal: Boolean = false,
-    var name: String = "",
-    var soloBLocal: Boolean = false
-)
-
-/** Состояние одного aux return - НЕ подтверждено реальным захватом. */
-data class AuxReturnData(
-    var fader: Float = 0f,
-    var mutedLocal: Boolean = false,
-    var name: String = "",
-    var colourArgb: Int? = null,
-    var soloBLocal: Boolean = false
-)
-
-/** Состояние одной aux-шины (собственный уровень шины, не посыл с канала). */
-data class AuxBusData(
-    var fader: Float = 0f,
-    var mutedLocal: Boolean = false,
-    var name: String = "",
-    var colourArgb: Int? = null,
-    var soloBLocal: Boolean = false
-)
-
-data class VcaData(
-    var fader: Float = 0f,
-    var mutedLocal: Boolean = false,
-    var name: String = "",
-    var colourArgb: Int? = null
-)
-
-/**
- * Хранит сокет, подписки и последние значения каналов ВНЕ жизненного цикла
- * Activity. ВАЖНО: при повороте экрана Android по умолчанию полностью
- * уничтожает и пересоздаёт Activity - без этого объекта UDP-сокет и все
- * подписки на пульт закрывались бы при каждом повороте, и приходилось бы
- * подключаться заново. Simple top-level object переживает столько, сколько
- * жив процесс приложения, независимо от Activity.
- */
-object ConnectionHolder {
-    var socket: DatagramSocket? = null
-    var receiveJob: Job? = null
-    var pollJob: Job? = null
-    var consoleAddress: InetAddress? = null
-    var consolePort: Int = 10000
-    var sessionToken: Int? = null
-    var subscribedAlready: Boolean = false
-    // Текущий выбранный банк каналов и режим (КАНАЛЫ/AUX/MASTER) - хранится
-    // здесь, а не в Activity, чтобы поворот экрана не сбрасывал выбор
-    // обратно на банк 1-8 / режим "каналы".
-    var uiBankStart: Int = 0
-    var uiStripMode: StripMode = StripMode.CHANNELS
-    // ВАЖНО (исправление сброса при повороте): раньше "какой канал открыт
-    // в детальном экране" и "какая там вкладка" хранились ПРЯМО в
-    // MainActivity как обычные поля - а при повороте экрана Android
-    // ПОЛНОСТЬЮ пересоздаёт активность (подтверждено логом - разные хеши
-    // окна ДО и ПОСЛЕ поворота), и такие поля сбрасываются в null/по
-    // умолчанию. Теперь - как и uiBankStart/uiStripMode - хранятся здесь,
-    // в ConnectionHolder, который переживает пересоздание активности.
-    var openDetailChannel: Int? = null
-    var openDetailTabName: String = "INPUT"
-    // Режим приложения (инженер/монитор) и выбранная шина монитора -
-    // тоже переживают поворот экрана.
-    var uiAppMode: String = "engineer"
-    var uiMonitorSelectedBus: Int = -1
-    // Уникальный для каждого подключения суффикс хендлов - чтобы старые
-    // подписки от прошлых сессий (пульт, похоже, не всегда их сам заменяет,
-    // а копит) не могли смешаться с текущими и вызывать хаотичные скачки
-    // значений на одноимённых хендлах.
-    var sessionId: String = ""
-    val subscriptions = mutableMapOf<String, Subscription>()
-    // Отдельная карта для мастер-каналов - индексы 0..2 у мастеров и
-    // обычных каналов пересекаются, поэтому держим их раздельно, чтобы
-    // не перепутать при разборе входящих push-обновлений.
-    val masterSubscriptions = mutableMapOf<String, Subscription>()
-    // Какие каналы уже подписаны на свои 16 aux-посылов (лениво, по
-    // требованию - см. subscribeAuxSends).
-    val auxSendsSubscribed = mutableSetOf<Int>()
-    // Какие каналы уже подписаны на свой EQ (лениво, по требованию).
-    val eqSubscribed = mutableSetOf<Int>()
-    val gateSubscribed = mutableSetOf<Int>()
-    val inputExtrasSubscribed = mutableSetOf<Int>()
-    val compGateExtrasSubscribed = mutableSetOf<Int>()
-    val channelData = Array(56) { ChannelData() }
-    // По мануалу у Pro2 3 мастер-канала.
-    val masterData = Array(3) { MasterData() }
-    val auxReturnData = Array(8) { AuxReturnData() }
-    val auxBusData = Array(16) { AuxBusData() }
-    val vcaData = Array(8) { VcaData() }
-    // Отдельная карта для 16 aux-шин.
-    val auxBusSubscriptions = mutableMapOf<String, Subscription>()
-    // Отдельная карта для VCA-групп (8 шт., подтверждено реальным захватом).
-    val vcaSubscriptions = mutableMapOf<String, Subscription>()
-    // Отдельная карта для aux returns - индексы 0..7 пересекаются и с
-    // обычными каналами, и с VCA в будущем.
-    val auxSubscriptions = mutableMapOf<String, Subscription>()
-
-    fun reset() {
-        socket = null
-        receiveJob = null
-        pollJob = null
-        consoleAddress = null
-        sessionToken = null
-        subscribedAlready = false
-        subscriptions.clear()
-    }
-}
-
 class MainActivity : AppCompatActivity() {
 
     companion object {
@@ -232,61 +30,63 @@ class MainActivity : AppCompatActivity() {
         const val MODE_ENGINEER = "engineer"
         const val MODE_MONITOR = "monitor"
     }
-    private var appMode: String = MODE_ENGINEER
+    internal var appMode: String = MODE_ENGINEER
 
     // Реальная конфигурация пульта Pro2 (подтверждено мануалом): 56 входных
     // каналов. Показываем по 8 за раз через переключение банков (см.
     // switchBank), но строим полосы для всех 56 сразу.
-    private val numChannels = 56
+    internal val numChannels = 56
     private val channelsPerBank = 8
 
-    private lateinit var editHost: EditText
-    private lateinit var editPort: EditText
+    internal lateinit var editHost: EditText
+    internal lateinit var editPort: EditText
     private lateinit var btnConnect: Button
-    private lateinit var textStatus: TextView
-    private lateinit var textConnectionStatus: TextView
+    internal lateinit var textStatus: TextView
+    internal lateinit var textConnectionStatus: TextView
     private lateinit var containerChannels: android.widget.LinearLayout
     private lateinit var channelDetailContainer: android.widget.FrameLayout
 
     // Прокси к ConnectionHolder - весь остальной код обращается к этим полям
     // как раньше (socket, receiveJob и т.д.), но реальное хранение теперь
     // живёт вне Activity и переживает поворот экрана.
-    private var socket: DatagramSocket?
+    internal var socket: DatagramSocket?
         get() = ConnectionHolder.socket
         set(value) { ConnectionHolder.socket = value }
-    private var receiveJob: Job?
+    internal var receiveJob: Job?
         get() = ConnectionHolder.receiveJob
         set(value) { ConnectionHolder.receiveJob = value }
-    private var pollJob: Job?
+    internal var pollJob: Job?
         get() = ConnectionHolder.pollJob
         set(value) { ConnectionHolder.pollJob = value }
-    private var consoleAddress: InetAddress?
+    internal var consoleAddress: InetAddress?
         get() = ConnectionHolder.consoleAddress
         set(value) { ConnectionHolder.consoleAddress = value }
-    private var consolePort: Int
+    internal var consolePort: Int
         get() = ConnectionHolder.consolePort
         set(value) { ConnectionHolder.consolePort = value }
-    private var sessionToken: Int?
+    internal var sessionToken: Int?
         get() = ConnectionHolder.sessionToken
         set(value) { ConnectionHolder.sessionToken = value }
-    private var subscribedAlready: Boolean
+    internal var subscribedAlready: Boolean
         get() = ConnectionHolder.subscribedAlready
         set(value) { ConnectionHolder.subscribedAlready = value }
-    private var sessionId: String
+    internal var sessionId: String
         get() = ConnectionHolder.sessionId
         set(value) { ConnectionHolder.sessionId = value }
-    private val subscriptions get() = ConnectionHolder.subscriptions
-    private val masterSubscriptions get() = ConnectionHolder.masterSubscriptions
-    private val auxSubscriptions get() = ConnectionHolder.auxSubscriptions
-    private val auxBusSubscriptions get() = ConnectionHolder.auxBusSubscriptions
-    private val vcaSubscriptions get() = ConnectionHolder.vcaSubscriptions
-    private val auxSendsSubscribed get() = ConnectionHolder.auxSendsSubscribed
-    private val eqSubscribed get() = ConnectionHolder.eqSubscribed
-    private val gateSubscribed get() = ConnectionHolder.gateSubscribed
-    private val inputExtrasSubscribed get() = ConnectionHolder.inputExtrasSubscribed
-    private val compGateExtrasSubscribed get() = ConnectionHolder.compGateExtrasSubscribed
+    internal val subscriptions get() = ConnectionHolder.subscriptions
+    internal val masterSubscriptions get() = ConnectionHolder.masterSubscriptions
+    internal val auxSubscriptions get() = ConnectionHolder.auxSubscriptions
+    internal val auxBusSubscriptions get() = ConnectionHolder.auxBusSubscriptions
+    internal val vcaSubscriptions get() = ConnectionHolder.vcaSubscriptions
+    internal val vcaMemberSubscriptions get() = ConnectionHolder.vcaMemberSubscriptions
+    internal val mainOutSubscriptions get() = ConnectionHolder.mainOutSubscriptions
+    internal val auxSendsSubscribed get() = ConnectionHolder.auxSendsSubscribed
+    internal val eqSubscribed get() = ConnectionHolder.eqSubscribed
+    internal val gateSubscribed get() = ConnectionHolder.gateSubscribed
+    internal val inputExtrasSubscribed get() = ConnectionHolder.inputExtrasSubscribed
+    internal val compGateExtrasSubscribed get() = ConnectionHolder.compGateExtrasSubscribed
 
-    private data class ChannelUi(
+    internal data class ChannelUi(
         val rootView: android.view.View,
         val labelView: TextView,
         val levelValueText: TextView,
@@ -322,7 +122,7 @@ class MainActivity : AppCompatActivity() {
         var isDragging: Boolean = false
     )
 
-    private val channels = mutableListOf<ChannelUi>()
+    internal val channels = mutableListOf<ChannelUi>()
 
     private val minSendIntervalMs = 40L
 
@@ -359,6 +159,7 @@ class MainActivity : AppCompatActivity() {
         buildAuxStrips()
         buildAuxBusStrips()
         buildVcaStrips()
+        buildMainOutStrips()
         buildModeButtons()
 
         btnConnect.setOnClickListener { connectAndSync() }
@@ -398,7 +199,12 @@ class MainActivity : AppCompatActivity() {
     private var monitorBusFader: SeekBar? = null
     private var monitorBusMuteButton: Button? = null
     private var monitorBusMutedLocal = false
-    private var monitorChannelStrips: Array<Pair<SeekBar, TextView>?> = arrayOfNulls(56)
+    private data class MonitorChannelUi(val seek: SeekBar, val valueText: TextView, val meterBar: android.view.View)
+    private var monitorChannelStrips: Array<MonitorChannelUi?> = arrayOfNulls(56)
+    // Какая VCA-группа сейчас открыта на экране "VCA N MEMBERS" (для live-
+    // обновления кнопок push-ответами) и сами кнопки по ключу "тип:индекс".
+    private var openVcaMembersIndex: Int? = null
+    private val vcaMemberButtons = mutableMapOf<String, Button>()
     private var monitorChannelLabels: Array<TextView?> = arrayOfNulls(56)
     private val monitorBankButtons = mutableListOf<Button>()
     private var monitorBankStart = 0
@@ -567,6 +373,8 @@ class MainActivity : AppCompatActivity() {
             val valueText = strip.findViewById<TextView>(R.id.textMonitorSendValue)
             val seek = strip.findViewById<SeekBar>(R.id.seekMonitorSend)
             val sendContainer = strip.findViewById<android.widget.FrameLayout>(R.id.monitorSendContainer)
+            val meterBar = strip.findViewById<android.view.View>(R.id.monitorMeterBar)
+            setupMeterBarPivot(meterBar)
 
             val chData = ConnectionHolder.channelData[i]
             label.text = if (chData.name.isNotBlank()) chData.name else "CH ${i + 1}"
@@ -618,7 +426,7 @@ class MainActivity : AppCompatActivity() {
                 }
             })
 
-            monitorChannelStrips[i] = seek to valueText
+            monitorChannelStrips[i] = MonitorChannelUi(seek, valueText, meterBar)
             monitorChannelLabels[i] = label
             container.addView(strip)
         }
@@ -629,37 +437,6 @@ class MainActivity : AppCompatActivity() {
      * же самое, что подписка на все 16 шин ОДНОГО канала во вкладке SENDS
      * инженерского режима - там другой порядок перебора).
      */
-    private fun subscribeChannelSendsForBus(bus: Int) {
-        val sock = socket ?: return
-        val address = consoleAddress ?: return
-        val port = consolePort
-        val token = sessionToken ?: return
-
-        CoroutineScope(Dispatchers.IO).launch {
-            val sid = sessionId
-            for (ch in 0 until numChannels) {
-                val handle = "/h_${sid}_${ch}_msend${bus}"
-                val nameHandle = "/h_${sid}_${ch}_mname"
-                withContext(Dispatchers.Main) {
-                    subscriptions[handle] = Subscription(ch, ParamKind.AUX_SEND, bus + 1)
-                    subscriptions[nameHandle] = Subscription(ch, ParamKind.NAME)
-                }
-                try {
-                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, Pro2Commands.subSendLevelAddress(bus + 1), ch, ch, token))
-                } catch (e: Exception) {
-                    // не критично - не прерываем остальные
-                }
-                delay(2)
-                // Заодно и имена каналов - вдруг ещё не подписаны.
-                try {
-                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(nameHandle, Pro2Commands.nameAddress(), ch, ch, token))
-                } catch (e: Exception) {
-                    // не критично
-                }
-                delay(2)
-            }
-        }
-    }
 
     /** Заполняет только что построенный экран уже накопленными данными каналов. */
     private fun restoreUiFromChannelData() {
@@ -893,6 +670,7 @@ class MainActivity : AppCompatActivity() {
     private val auxStrips = mutableListOf<SimpleStripUi>()
     private val auxBusStrips = mutableListOf<SimpleStripUi>()
     private val vcaStrips = mutableListOf<SimpleStripUi>()
+    private val mainOutStrips = mutableListOf<SimpleStripUi>()
 
     /**
      * Строит одну упрощённую полосу (шапка+SOLO+метр/фейдер+MUTE) в
@@ -910,7 +688,7 @@ class MainActivity : AppCompatActivity() {
         onMute: (Boolean) -> Unit,
         onSolo: (Boolean) -> Unit,
         onSoloB: (Boolean) -> Unit,
-        showSoloB: Boolean = true
+        showSoloB: Boolean = false // Убрано по просьбе пользователя
     ): SimpleStripUi {
         val inflater = LayoutInflater.from(this)
         val strip = inflater.inflate(R.layout.channel_strip, container, false)
@@ -1094,6 +872,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Main Outs (8 позиций, "matrix out" на самом пульте). Базовая полоса
+     * (фейдер/mute/solo/имя/цвет) - см. подробную заметку у
+     * Pro2Commands.mainOut*Address(). EQ/компрессор Main Outs пока не
+     * реализованы.
+     */
+    private fun buildMainOutStrips() {
+        val container = findViewById<android.widget.LinearLayout>(R.id.containerMainOuts)
+        container.removeAllViews()
+        mainOutStrips.clear()
+        for (m in 0 until 8) {
+            val data = ConnectionHolder.mainOutData[m]
+            val ui = buildSimpleStrip(
+                container, "MAIN ${m + 1}", data.fader, data.mutedLocal, initialSoloB = false,
+                onFader = { level -> ConnectionHolder.mainOutData[m].fader = level; sendRawAsync(Pro2Commands.setMainOutFader(m, level)) },
+                onMute = { muted -> ConnectionHolder.mainOutData[m].mutedLocal = muted; sendRawAsync(Pro2Commands.setMainOutMute(m, true)) },
+                onSolo = { soloed -> sendRawAsync(Pro2Commands.setMainOutSolo(m, soloed)) },
+                onSoloB = { /* Solo B у Main Outs не подтверждено, кнопка скрыта. */ },
+                showSoloB = false
+            )
+            mainOutStrips.add(ui)
+        }
+    }
+
     // Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX BUSES, MASTER - мастер
     // намеренно в конце, по просьбе (обычно с ним работают реже всего).
     private var currentStripMode = StripMode.CHANNELS
@@ -1131,12 +933,14 @@ class MainActivity : AppCompatActivity() {
         val btnAuxBus = makeTab("AUX BUSES", StripMode.AUX_BUS)
         val btnVca = makeTab("VCA", StripMode.VCA)
         val btnMaster = makeTab("MASTER", StripMode.MASTER)
+        val btnMainOuts = makeTab("MAIN OUTS", StripMode.MAIN_OUTS)
         modeButtons = mapOf(
             StripMode.CHANNELS to btnChannels,
             StripMode.AUX_RETURNS to btnAux,
             StripMode.AUX_BUS to btnAuxBus,
             StripMode.VCA to btnVca,
-            StripMode.MASTER to btnMaster
+            StripMode.MASTER to btnMaster,
+            StripMode.MAIN_OUTS to btnMainOuts
         )
 
         switchStripMode(ConnectionHolder.uiStripMode)
@@ -1169,6 +973,8 @@ class MainActivity : AppCompatActivity() {
             if (mode == StripMode.VCA) android.view.View.VISIBLE else android.view.View.GONE
         findViewById<android.view.View>(R.id.containerMaster).visibility =
             if (mode == StripMode.MASTER) android.view.View.VISIBLE else android.view.View.GONE
+        findViewById<android.view.View>(R.id.containerMainOuts).visibility =
+            if (mode == StripMode.MAIN_OUTS) android.view.View.VISIBLE else android.view.View.GONE
         // Банки (1-8, 9-16 и т.д.) относятся только к обычным входным каналам.
         findViewById<android.view.View>(R.id.bankButtonsScroll).visibility =
             if (mode == StripMode.CHANNELS) android.view.View.VISIBLE else android.view.View.GONE
@@ -1180,98 +986,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun connectAndSync() {
-        val host = editHost.text.toString().trim()
-        val port = editPort.text.toString().trim().toIntOrNull()
-        if (host.isEmpty() || port == null) {
-            textStatus.text = "Check IP and port"
-            return
-        }
 
-        receiveJob?.cancel()
-        pollJob?.cancel()
-        socket?.close()
-
-        // Новое подключение - начинаем подписку с нуля.
-        sessionToken = null
-        subscribedAlready = false
-        subscriptions.clear()
-        masterSubscriptions.clear()
-        auxSubscriptions.clear()
-        auxBusSubscriptions.clear()
-        vcaSubscriptions.clear()
-        auxSendsSubscribed.clear()
-        eqSubscribed.clear()
-        gateSubscribed.clear()
-        inputExtrasSubscribed.clear()
-        compGateExtrasSubscribed.clear()
-        sessionId = System.currentTimeMillis().toString(36)
-
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val address = InetAddress.getByName(host)
-                val newSocket = DatagramSocket(10001) // локальный порт - пульт шлёт ответы именно сюда
-
-                withContext(Dispatchers.Main) {
-                    socket = newSocket
-                    consoleAddress = address
-                    consolePort = port
-                    textConnectionStatus.text = "● Connected"
-                    textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
-                    textStatus.text = "Connected to $host:$port, subscribing to live updates..."
-                }
-
-                startReceiveLoop(newSocket)
-
-                // ВАЖНО: раньше здесь всегда запрашивалось начальное
-                // состояние ВСЕХ 56 каналов (280 GET-запросов без пауз) и
-                // полная подписка (~800 параметров), даже для мониторного
-                // режима, которому это всё вообще не нужно (мониторке нужны
-                // только aux-шины + позже посылы выбранной шины). Из-за
-                // этого суммарная нагрузка на пульт при подключении
-                // мониторки оказывалась БОЛЬШЕ, чем у инженерского режима,
-                // и, судя по всему, именно это сбивало официальный Mixtender.
-                if (appMode == MODE_MONITOR) {
-                    subscribeMonitorEssentials(newSocket, address, port)
-                } else {
-                    requestInitialState(newSocket, address, port)
-                }
-
-                // ВАЖНО - ИСПРАВЛЕНИЕ ЗАЦИКЛИВАНИЯ: раньше подписка ждала, пока
-                // придёт входящий пакет с "токеном" пульта, чтобы его переиспользовать.
-                // Но если это устройство/IP ещё ни на что не подписывалось, пульт
-                // может вообще ничего не присылать сам по себе - тогда токен никогда
-                // не появится, подписка никогда не отправится, и телефон бесконечно
-                // ждёт то, что зависит от его же собственного действия.
-                // Решение: подписываемся СРАЗУ с условным токеном-заглушкой (0),
-                // не дожидаясь ответа. Если позже придёт настоящий токен от пульта -
-                // sessionToken обновится, но переподписываться заново не обязательно.
-                subscribedAlready = true
-                sessionToken = 0
-                if (appMode != MODE_MONITOR) {
-                    subscribeAll()
-                }
-                startPollLoop(newSocket, address, port)
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    textConnectionStatus.text = "● Connection error"
-                    textConnectionStatus.setTextColor(Color.parseColor("#ff3b30"))
-                    textStatus.text = "Connection error: ${e.message}"
-                }
-            }
-        }
-    }
-
-    private suspend fun requestInitialState(socket: DatagramSocket, address: InetAddress, port: Int) {
-        for (i in 0 until numChannels) {
-            sendRaw(socket, address, port, Pro2Commands.getFader(i))
-            sendRaw(socket, address, port, Pro2Commands.getMute(i))
-            sendRaw(socket, address, port, Pro2Commands.getSolo(i))
-            sendRaw(socket, address, port, Pro2Commands.getGain(i))
-            sendRaw(socket, address, port, Pro2Commands.getName(i))
-            delay(2)
-        }
-    }
 
     /**
      * Облегчённая подписка специально для мониторного режима - только то,
@@ -1280,30 +995,6 @@ class MainActivity : AppCompatActivity() {
      * конкретных каналов в выбранную шину подписываются отдельно и позже,
      * когда пользователь реально выберет шину (subscribeChannelSendsForBus).
      */
-    private suspend fun subscribeMonitorEssentials(socket: DatagramSocket, address: InetAddress, port: Int) {
-        val token = sessionToken ?: 0
-        val sid = sessionId
-        for (b in 0 until 16) {
-            val subs = listOf(
-                "/h_${sid}_mb${b}_fader" to Triple(Pro2Commands.auxBusFaderAddress(), ParamKind.FADER, b),
-                "/h_${sid}_mb${b}_mute" to Triple(Pro2Commands.auxBusMuteAddress(), ParamKind.MUTE, b),
-                "/h_${sid}_mb${b}_name" to Triple(Pro2Commands.auxBusNameAddress(), ParamKind.NAME, b),
-                "/h_${sid}_mb${b}_colour" to Triple(Pro2Commands.auxBusColourAddress(), ParamKind.COLOUR, b),
-            )
-            withContext(Dispatchers.Main) {
-                for ((handle, info) in subs) auxBusSubscriptions[handle] = Subscription(info.third, info.second)
-            }
-            for ((handle, info) in subs) {
-                val (path, kind, ch) = info
-                try {
-                    sendRaw(socket, address, port, Pro2Commands.batchSubscribe(handle, path, ch, ch, token))
-                } catch (e: Exception) {
-                    // не критично
-                }
-                delay(2)
-            }
-        }
-    }
 
     /**
      * Отправляет "/renew" каждые 3 секунды, пока идёт сессия.
@@ -1315,59 +1006,7 @@ class MainActivity : AppCompatActivity() {
      * интервалом (~3 сек) постоянно, всё время, пока идёт сессия - это,
      * по всей видимости, продление "аренды" подписки на стороне пульта.
      */
-    private fun startPollLoop(socket: DatagramSocket, address: InetAddress, port: Int) {
-        pollJob = CoroutineScope(Dispatchers.IO).launch {
-            while (isActive) {
-                delay(3000L)
-                try {
-                    sendRaw(socket, address, port, Pro2Commands.renew())
-                } catch (e: Exception) {
-                    if (!isActive) break
-                }
-            }
-        }
-    }
 
-    private fun startReceiveLoop(socket: DatagramSocket) {
-        receiveJob = CoroutineScope(Dispatchers.IO).launch {
-            val buffer = ByteArray(4096)
-            socket.soTimeout = 1000
-            while (isActive) {
-                try {
-                    val packet = DatagramPacket(buffer, buffer.size)
-                    socket.receive(packet)
-                    val data = packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
-
-                    // ВАЖНО: пульт почти всё шлёт завёрнутым в OSC-бандлы, а не
-                    // простыми сообщениями - используем decodeElement (умеет и то,
-                    // и другое), а не старый decode().
-                    val element = OscUtil.decodeElement(data) ?: continue
-                    val messages = OscUtil.flatten(element)
-
-                    // ВАЖНО (исправление зависания метров): раньше здесь стоял
-                    // withContext(Dispatchers.Main), который блокирует цикл
-                    // приёма, пока обновление интерфейса полностью не
-                    // закончится - и только потом читается следующий пакет
-                    // из сокета. Метры обновляются намного чаще всего
-                    // остального (десятки раз в секунду по всем каналам), и
-                    // при любой задержке на главном потоке буфер ОС
-                    // переполняется, а лишние UDP-пакеты молча теряются -
-                    // именно метры страдают от этого первыми и сильнее
-                    // всего. Теперь просто "отправляем и забываем" - цикл
-                    // приёма сразу же возвращается вычитывать сокет дальше,
-                    // не дожидаясь окончания отрисовки.
-                    CoroutineScope(Dispatchers.Main).launch {
-                        for (msg in messages) handleIncomingMessage(msg)
-                    }
-                } catch (e: SocketTimeoutException) {
-                    // норма - просто нет данных за секунду, продолжаем ждать
-                } catch (e: Exception) {
-                    if (!isActive) break
-                    withContext(Dispatchers.Main) { textStatus.text = "Receive error: ${e.message}" }
-                }
-            }
-        }
-    }
 
     /**
      * Обрабатываем одно "плоское" сообщение (уже развёрнутое из бандла, если было).
@@ -1380,87 +1019,6 @@ class MainActivity : AppCompatActivity() {
      *    но по факту (подтверждено захватом трафика) пульт так не отвечает никогда -
      *    этот путь, скорее всего, никогда не сработает на реальном пульте.
      */
-    private fun handleIncomingMessage(message: OscElement.Message) {
-        // Учимся реальному токену пульта из ЛЮБОГО входящего ",bi"-сообщения.
-        // Подписка (subscribeAll) уже отправлена сразу при подключении с токеном-
-        // заглушкой (0), чтобы не зависеть от того, придёт ли что-то от пульта
-        // само по себе - здесь просто держим sessionToken в актуальном состоянии
-        // на будущее (например, если понадобится переподписаться).
-        if (message.typeTag == ",bi" && message.args.size == 2) {
-            val token = message.args[1] as? Int
-            if (token != null) {
-                sessionToken = token
-                if (!subscribedAlready) {
-                    subscribedAlready = true
-                    subscribeAll()
-                }
-            }
-        }
-
-        // Путь 1: это ответ на нашу подписку?
-        val subscription = subscriptions[message.address]
-        if (subscription != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
-            val blob = message.args[0] as? ByteArray ?: return
-            handleSubscribedValue(subscription, blob)
-            return
-        }
-        val masterSub = masterSubscriptions[message.address]
-        if (masterSub != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
-            val blob = message.args[0] as? ByteArray ?: return
-            handleMasterSubscribedValue(masterSub, blob)
-            return
-        }
-        val auxSub = auxSubscriptions[message.address]
-        if (auxSub != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
-            val blob = message.args[0] as? ByteArray ?: return
-            handleAuxReturnSubscribedValue(auxSub, blob)
-            return
-        }
-        val auxBusSub = auxBusSubscriptions[message.address]
-        if (auxBusSub != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
-            val blob = message.args[0] as? ByteArray ?: return
-            handleAuxBusSubscribedValue(auxBusSub, blob)
-            return
-        }
-        val vcaSub = vcaSubscriptions[message.address]
-        if (vcaSub != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
-            val blob = message.args[0] as? ByteArray ?: return
-            handleVcaSubscribedValue(vcaSub, blob)
-            return
-        }
-
-        // Путь 2: человекочитаемый адрес (см. примечание выше - по факту не срабатывает,
-        // оставлено на будущее / на случай другой прошивки пульта).
-        val args = message.args
-        when (message.address) {
-            Pro2Commands.faderAddress() -> {
-                val channel = (args.getOrNull(0) as? Int) ?: return
-                val level = (args.getOrNull(1) as? Float) ?: return
-                updateFaderUi(channel, level)
-            }
-            Pro2Commands.muteAddress() -> {
-                val channel = (args.getOrNull(0) as? Int) ?: return
-                val muted = (args.getOrNull(1) as? Int) ?: return
-                updateMuteUi(channel, muted != 0)
-            }
-            Pro2Commands.soloAddress() -> {
-                val channel = (args.getOrNull(0) as? Int) ?: return
-                val soloed = (args.getOrNull(1) as? Int) ?: return
-                updateSoloUi(channel, soloed != 0)
-            }
-            Pro2Commands.gainAddress() -> {
-                val channel = (args.getOrNull(0) as? Int) ?: return
-                val level = (args.getOrNull(1) as? Float) ?: return
-                updateGainUi(channel, level)
-            }
-            Pro2Commands.nameAddress() -> {
-                val channel = (args.getOrNull(0) as? Int) ?: return
-                val name = (args.getOrNull(1) as? String) ?: return
-                updateNameUi(channel, name)
-            }
-            else -> { /* прочие сообщения (например, метры) пока не обрабатываем */ }
-        }
-    }
 
     /**
      * Отправляет подписку на mute/solo/fader/gain/имя для каждого канала.
@@ -1476,152 +1034,6 @@ class MainActivity : AppCompatActivity() {
      * сделать ещё один прицельный захват (подписаться и подвигать mute/fader
      * в самом Mixtender) и свериться.
      */
-    private fun subscribeAll() {
-        val sock = socket ?: return
-        val address = consoleAddress ?: return
-        val port = consolePort
-        val token = sessionToken ?: return
-
-        CoroutineScope(Dispatchers.IO).launch {
-            val sid = sessionId
-            for (i in 0 until numChannels) {
-                val subs = listOf(
-                    "/h_${sid}_${i}_fader" to Triple(Pro2Commands.faderAddress(), ParamKind.FADER, i),
-                    "/h_${sid}_${i}_mute" to Triple(Pro2Commands.muteAddress(), ParamKind.MUTE, i),
-                    "/h_${sid}_${i}_solo" to Triple(Pro2Commands.soloAddress(), ParamKind.SOLO, i),
-                    "/h_${sid}_${i}_gain" to Triple(Pro2Commands.gainAddress(), ParamKind.GAIN, i),
-                    "/h_${sid}_${i}_name" to Triple(Pro2Commands.nameAddress(), ParamKind.NAME, i),
-                    "/h_${sid}_${i}_colour" to Triple(Pro2Commands.colourAddress(), ParamKind.COLOUR, i),
-                    "/h_${sid}_${i}_meter" to Triple(Pro2Commands.meterAddress(), ParamKind.METER, i),
-                    "/h_${sid}_${i}_compratio" to Triple(Pro2Commands.compRatioAddress(), ParamKind.COMP_RATIO, i),
-                    "/h_${sid}_${i}_compattack" to Triple(Pro2Commands.compAttackAddress(), ParamKind.COMP_ATTACK, i),
-                    "/h_${sid}_${i}_comprelease" to Triple(Pro2Commands.compReleaseAddress(), ParamKind.COMP_RELEASE, i),
-                    "/h_${sid}_${i}_compthreshold" to Triple(Pro2Commands.compThresholdAddress(), ParamKind.COMP_THRESHOLD, i),
-                    "/h_${sid}_${i}_compmakeup" to Triple(Pro2Commands.compMakeupGainAddress(), ParamKind.COMP_MAKEUP, i),
-                    "/h_${sid}_${i}_compin" to Triple(Pro2Commands.compInAddress(), ParamKind.COMP_IN, i),
-                )
-                // ВАЖНО (исправление потерянных подписок): раньше здесь на
-                // КАЖДУЮ подписку было отдельное переключение на главный
-                // поток (withContext), да ещё пакеты слались вообще без
-                // пауз - пульт получал шквал из тысяч UDP-пакетов почти
-                // одновременно и, судя по всему, часть просто не успевал
-                // обработать (отсюда непокрашенные/неподписанные каналы и
-                // шины). Теперь: сначала одним пакетом регистрируем все
-                // хендлы (один переход на главный поток вместо тысячи), а
-                // сами пакеты шлём с небольшой паузой между ними - хватает,
-                // чтобы не заваливать пульт, но не сильно удлиняет общее
-                // время подписки.
-                withContext(Dispatchers.Main) {
-                    for ((handle, info) in subs) {
-                        subscriptions[handle] = Subscription(info.third, info.second)
-                    }
-                }
-                for ((handle, info) in subs) {
-                    val (path, kind, channel) = info
-                    try {
-                        sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, channel, channel, token))
-                    } catch (e: Exception) {
-                        // подписка на один параметр не удалась - не прерываем остальные
-                    }
-                    delay(2)
-                }
-            }
-
-            // Мастер-каналы (3 шт. по мануалу) - НЕ подтверждено реальным
-            // захватом, но объём небольшой (12 подписок), поэтому
-            // подписываемся сразу вместе со всем остальным.
-            for (m in 0 until 3) {
-                val masterSubs = listOf(
-                    "/h_${sid}_m${m}_fader" to Triple(Pro2Commands.masterFaderAddress(), ParamKind.FADER, m),
-                    "/h_${sid}_m${m}_mute" to Triple(Pro2Commands.masterMuteAddress(), ParamKind.MUTE, m),
-                    "/h_${sid}_m${m}_solo" to Triple(Pro2Commands.masterSoloAddress(), ParamKind.SOLO, m),
-                    "/h_${sid}_m${m}_solob" to Triple(Pro2Commands.masterSoloBAddress(), ParamKind.SOLO_B, m),
-                    "/h_${sid}_m${m}_meter" to Triple(Pro2Commands.masterMeterAddress(), ParamKind.METER, m),
-                    "/h_${sid}_m${m}_name" to Triple(Pro2Commands.masterNameAddress(), ParamKind.NAME, m),
-                )
-                for ((handle, info) in masterSubs) {
-                    val (path, kind, mIdx) = info
-                    withContext(Dispatchers.Main) { masterSubscriptions[handle] = Subscription(mIdx, kind) }
-                    try {
-                        sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, mIdx, mIdx, token))
-                    } catch (e: Exception) {
-                        // не критично - не прерываем остальное
-                    }
-                }
-            }
-
-            // Aux Returns (8 шт. по мануалу) - НЕ подтверждено реальным
-            // захватом. Объём небольшой (32 подписки), подписываемся сразу.
-            for (a in 0 until 8) {
-                val auxSubs = listOf(
-                    "/h_${sid}_a${a}_fader" to Triple(Pro2Commands.auxReturnFaderAddress(), ParamKind.FADER, a),
-                    "/h_${sid}_a${a}_mute" to Triple(Pro2Commands.auxReturnMuteAddress(), ParamKind.MUTE, a),
-                    "/h_${sid}_a${a}_solo" to Triple(Pro2Commands.auxReturnSoloAddress(), ParamKind.SOLO, a),
-                    "/h_${sid}_a${a}_solob" to Triple(Pro2Commands.auxReturnSoloBAddress(), ParamKind.SOLO_B, a),
-                    "/h_${sid}_a${a}_meter" to Triple(Pro2Commands.auxReturnMeterAddress(), ParamKind.METER, a),
-                    "/h_${sid}_a${a}_name" to Triple(Pro2Commands.auxReturnNameAddress(), ParamKind.NAME, a),
-                    "/h_${sid}_a${a}_colour" to Triple(Pro2Commands.auxReturnColourAddress(), ParamKind.COLOUR, a),
-                )
-                for ((handle, info) in auxSubs) {
-                    val (path, kind, aIdx) = info
-                    withContext(Dispatchers.Main) { auxSubscriptions[handle] = Subscription(aIdx, kind) }
-                    try {
-                        sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, aIdx, aIdx, token))
-                    } catch (e: Exception) {
-                        // не критично - не прерываем остальное
-                    }
-                }
-            }
-
-            // 16 aux-шин - НЕ подтверждено реальным захватом. Объём умеренный
-            // (64 подписки), но всё ещё небольшой на фоне 56 каналов, так что
-            // подписываемся сразу, без ленивой подписки.
-            for (b in 0 until 16) {
-                val busSubs = listOf(
-                    "/h_${sid}_b${b}_fader" to Triple(Pro2Commands.auxBusFaderAddress(), ParamKind.FADER, b),
-                    "/h_${sid}_b${b}_mute" to Triple(Pro2Commands.auxBusMuteAddress(), ParamKind.MUTE, b),
-                    "/h_${sid}_b${b}_solo" to Triple(Pro2Commands.auxBusSoloAddress(), ParamKind.SOLO, b),
-                    "/h_${sid}_b${b}_solob" to Triple(Pro2Commands.auxBusSoloBAddress(), ParamKind.SOLO_B, b),
-                    "/h_${sid}_b${b}_meter" to Triple(Pro2Commands.auxBusMeterAddress(), ParamKind.METER, b),
-                    "/h_${sid}_b${b}_name" to Triple(Pro2Commands.auxBusNameAddress(), ParamKind.NAME, b),
-                    "/h_${sid}_b${b}_colour" to Triple(Pro2Commands.auxBusColourAddress(), ParamKind.COLOUR, b),
-                )
-                for ((handle, info) in busSubs) {
-                    val (path, kind, bIdx) = info
-                    withContext(Dispatchers.Main) { auxBusSubscriptions[handle] = Subscription(bIdx, kind) }
-                    try {
-                        sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, bIdx, bIdx, token))
-                    } catch (e: Exception) {
-                        // не критично - не прерываем остальное
-                    }
-                }
-            }
-
-            // VCA-группы (8 шт.) - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным трафиком iPad.
-            for (v in 0 until 8) {
-                val vcaSubs = listOf(
-                    "/h_${sid}_v${v}_fader" to Triple(Pro2Commands.vcaFaderAddress(), ParamKind.FADER, v),
-                    "/h_${sid}_v${v}_mute" to Triple(Pro2Commands.vcaMuteAddress(), ParamKind.MUTE, v),
-                    "/h_${sid}_v${v}_solo" to Triple(Pro2Commands.vcaSoloAddress(), ParamKind.SOLO, v),
-                    "/h_${sid}_v${v}_name" to Triple(Pro2Commands.vcaNameAddress(), ParamKind.NAME, v),
-                    "/h_${sid}_v${v}_colour" to Triple(Pro2Commands.vcaColourAddress(), ParamKind.COLOUR, v),
-                )
-                for ((handle, info) in vcaSubs) {
-                    val (path, kind, vIdx) = info
-                    withContext(Dispatchers.Main) { vcaSubscriptions[handle] = Subscription(vIdx, kind) }
-                    try {
-                        sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, vIdx, vIdx, token))
-                    } catch (e: Exception) {
-                        // не критично - не прерываем остальное
-                    }
-                }
-            }
-
-            withContext(Dispatchers.Main) {
-                textStatus.text = "Subscribed to live updates for all channels"
-            }
-        }
-    }
 
     /**
      * Подписывается на 16 aux-посылов ОДНОГО канала. Не делается сразу для
@@ -1629,87 +1041,12 @@ class MainActivity : AppCompatActivity() {
      * посылы реально нужны только когда открыта вкладка SENDS конкретного
      * канала. Вызывается один раз при первом открытии этой вкладки.
      */
-    private fun subscribeAuxSends(channel: Int) {
-        val sock = socket ?: return
-        val address = consoleAddress ?: return
-        val port = consolePort
-        val token = sessionToken ?: return
-        if (auxSendsSubscribed.contains(channel)) return
-        auxSendsSubscribed.add(channel)
-
-        CoroutineScope(Dispatchers.IO).launch {
-            val sid = sessionId
-            for (bus in 1..16) {
-                val handle = "/h_${sid}_${channel}_send$bus"
-                val enHandle = "/h_${sid}_${channel}_senden$bus"
-                val preHandle = "/h_${sid}_${channel}_sendpre$bus"
-                withContext(Dispatchers.Main) {
-                    subscriptions[handle] = Subscription(channel, ParamKind.AUX_SEND, bus)
-                    subscriptions[enHandle] = Subscription(channel, ParamKind.AUX_SEND_ENABLE, bus)
-                    subscriptions[preHandle] = Subscription(channel, ParamKind.AUX_SEND_PREFADE, bus)
-                }
-                try {
-                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, Pro2Commands.subSendLevelAddress(bus), channel, channel, token))
-                } catch (e: Exception) {
-                    // не критично
-                }
-                delay(2)
-                try {
-                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(enHandle, Pro2Commands.subSendEnableAddress(bus), channel, channel, token))
-                } catch (e: Exception) {
-                    // не критично
-                }
-                delay(2)
-                try {
-                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(preHandle, Pro2Commands.subSendPreFadeAddress(bus), channel, channel, token))
-                } catch (e: Exception) {
-                    // не критично
-                }
-                delay(2)
-            }
-        }
-    }
 
     /**
      * Подписывается на EQ ОДНОГО канала (17 параметров: общий IN + 4 полосы
      * × (активность + частота + гейн + ширина)). Лениво, только при первом
      * открытии вкладки EQ - как и с посылами.
      */
-    private fun subscribeEq(channel: Int) {
-        val sock = socket ?: return
-        val address = consoleAddress ?: return
-        val port = consolePort
-        val token = sessionToken ?: return
-        if (eqSubscribed.contains(channel)) return
-        eqSubscribed.add(channel)
-
-        CoroutineScope(Dispatchers.IO).launch {
-            val sid = sessionId
-            val subs = mutableListOf<Triple<String, String, Subscription>>()
-            subs.add(Triple("/h_${sid}_${channel}_eqin", Pro2Commands.eqInAddress(), Subscription(channel, ParamKind.EQ_IN)))
-            val bands = arrayOf(Pro2Commands.EqBand.BASS, Pro2Commands.EqBand.LOW_MID, Pro2Commands.EqBand.MID_HIGH, Pro2Commands.EqBand.TREBLE)
-            for ((bandIndex, band) in bands.withIndex()) {
-                subs.add(Triple("/h_${sid}_${channel}_eqact$bandIndex", Pro2Commands.eqBandActiveAddress(band), Subscription(channel, ParamKind.EQ_BAND_ACTIVE, eqBand = bandIndex)))
-                subs.add(Triple("/h_${sid}_${channel}_eqfreq$bandIndex", Pro2Commands.eqFreqAddress(band), Subscription(channel, ParamKind.EQ_FREQ, eqBand = bandIndex)))
-                subs.add(Triple("/h_${sid}_${channel}_eqgain$bandIndex", Pro2Commands.eqGainAddress(band), Subscription(channel, ParamKind.EQ_GAIN, eqBand = bandIndex)))
-                subs.add(Triple("/h_${sid}_${channel}_eqwidth$bandIndex", Pro2Commands.eqWidthAddress(band), Subscription(channel, ParamKind.EQ_WIDTH, eqBand = bandIndex)))
-            }
-            // Форма (bell/shelf) - ТОЛЬКО у BASS (индекс 0) и TREBLE (индекс 3).
-            subs.add(Triple("/h_${sid}_${channel}_eqshapebass", Pro2Commands.eqShapeAddress(Pro2Commands.EqBand.BASS), Subscription(channel, ParamKind.EQ_SHAPE_BASS)))
-            subs.add(Triple("/h_${sid}_${channel}_eqshapetreble", Pro2Commands.eqShapeAddress(Pro2Commands.EqBand.TREBLE), Subscription(channel, ParamKind.EQ_SHAPE_TREBLE)))
-            withContext(Dispatchers.Main) {
-                for ((handle, _, sub) in subs) subscriptions[handle] = sub
-            }
-            for ((handle, path, sub) in subs) {
-                try {
-                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, channel, channel, token))
-                } catch (e: Exception) {
-                    // не критично
-                }
-                delay(2)
-            }
-        }
-    }
 
     /** Лениво подписывается на 9 параметров Gate одного канала. */
     /**
@@ -1720,122 +1057,16 @@ class MainActivity : AppCompatActivity() {
      * сбоил даже официальный Mixtender на другом устройстве. Теперь - как
      * и с EQ/Gate/Sends - только при реальном открытии вкладки INPUT.
      */
-    private fun subscribeInputExtras(channel: Int) {
-        val sock = socket ?: return
-        val address = consoleAddress ?: return
-        val port = consolePort
-        val token = sessionToken ?: return
-        if (inputExtrasSubscribed.contains(channel)) return
-        inputExtrasSubscribed.add(channel)
-
-        CoroutineScope(Dispatchers.IO).launch {
-            val sid = sessionId
-            val subs = listOf(
-                "/h_${sid}_${channel}_solob" to Triple(Pro2Commands.soloBAddress(), ParamKind.SOLO_B, channel),
-                "/h_${sid}_${channel}_gaintrim" to Triple(Pro2Commands.gainTrimAddress(), ParamKind.GAIN_TRIM, channel),
-                "/h_${sid}_${channel}_pan" to Triple(Pro2Commands.panAddress(), ParamKind.PAN, channel),
-                "/h_${sid}_${channel}_phantom" to Triple(Pro2Commands.phantomPowerAddress(), ParamKind.PHANTOM, channel),
-                "/h_${sid}_${channel}_phase" to Triple(Pro2Commands.phaseAddress(), ParamKind.PHASE, channel),
-                "/h_${sid}_${channel}_hpin" to Triple(Pro2Commands.hpFilterInAddress(), ParamKind.HP_FILTER_IN, channel),
-                "/h_${sid}_${channel}_hpfreq" to Triple(Pro2Commands.hpFilterFreqAddress(), ParamKind.HP_FILTER_FREQ, channel),
-                "/h_${sid}_${channel}_lpin" to Triple(Pro2Commands.lpFilterInAddress(), ParamKind.LP_FILTER_IN, channel),
-                "/h_${sid}_${channel}_lpfreq" to Triple(Pro2Commands.lpFilterFreqAddress(), ParamKind.LP_FILTER_FREQ, channel),
-                "/h_${sid}_${channel}_delay" to Triple(Pro2Commands.inputDelayAddress(), ParamKind.INPUT_DELAY, channel),
-                "/h_${sid}_${channel}_link" to Triple(Pro2Commands.linkAddress(), ParamKind.LINK, channel),
-            )
-            withContext(Dispatchers.Main) {
-                for ((handle, info) in subs) subscriptions[handle] = Subscription(info.third, info.second)
-            }
-            for ((handle, info) in subs) {
-                val (path, kind, ch) = info
-                try {
-                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, ch, ch, token))
-                } catch (e: Exception) {
-                    // не критично
-                }
-                delay(2)
-            }
-        }
-    }
 
     /**
      * Лениво подписывается на фильтр компрессора и GR/detector-метры
      * (компрессор и gate) этого канала - тоже раньше были в мгновенной
      * подписке, тоже переведены на ленивую (см. заметку у subscribeInputExtras).
      */
-    private fun subscribeCompGateExtras(channel: Int) {
-        val sock = socket ?: return
-        val address = consoleAddress ?: return
-        val port = consolePort
-        val token = sessionToken ?: return
-        if (compGateExtrasSubscribed.contains(channel)) return
-        compGateExtrasSubscribed.add(channel)
 
-        CoroutineScope(Dispatchers.IO).launch {
-            val sid = sessionId
-            val subs = listOf(
-                "/h_${sid}_${channel}_compgr" to Triple(Pro2Commands.compGrMeterAddress(), ParamKind.COMP_GR_METER, channel),
-                "/h_${sid}_${channel}_compdet" to Triple(Pro2Commands.compDetMeterAddress(), ParamKind.COMP_DET_METER, channel),
-                "/h_${sid}_${channel}_compflt" to Triple(Pro2Commands.compFiltersInAddress(), ParamKind.COMP_FILTERS_IN, channel),
-                "/h_${sid}_${channel}_compfltfreq" to Triple(Pro2Commands.compFilterFreqAddress(), ParamKind.COMP_FILTER_FREQ, channel),
-                "/h_${sid}_${channel}_gategr" to Triple(Pro2Commands.gateGrMeterAddress(), ParamKind.GATE_GR_METER, channel),
-                "/h_${sid}_${channel}_gatedet" to Triple(Pro2Commands.gateDetMeterAddress(), ParamKind.GATE_DET_METER, channel),
-                "/h_${sid}_${channel}_compmode" to Triple(Pro2Commands.compDetectorModeAddress(), ParamKind.COMP_MODE, channel),
-                "/h_${sid}_${channel}_gatemode" to Triple(Pro2Commands.gateModeAddress(), ParamKind.GATE_MODE, channel),
-            )
-            withContext(Dispatchers.Main) {
-                for ((handle, info) in subs) subscriptions[handle] = Subscription(info.third, info.second)
-            }
-            for ((handle, info) in subs) {
-                val (path, kind, ch) = info
-                try {
-                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, ch, ch, token))
-                } catch (e: Exception) {
-                    // не критично
-                }
-                delay(2)
-            }
-        }
-    }
-
-    private fun subscribeGate(channel: Int) {
-        val sock = socket ?: return
-        val address = consoleAddress ?: return
-        val port = consolePort
-        val token = sessionToken ?: return
-        if (gateSubscribed.contains(channel)) return
-        gateSubscribed.add(channel)
-
-        CoroutineScope(Dispatchers.IO).launch {
-            val sid = sessionId
-            val subs = listOf(
-                "/h_${sid}_${channel}_gatein" to Triple(Pro2Commands.gateInAddress(), ParamKind.GATE_IN, channel),
-                "/h_${sid}_${channel}_gatethr" to Triple(Pro2Commands.gateThresholdAddress(), ParamKind.GATE_THRESHOLD, channel),
-                "/h_${sid}_${channel}_gaterange" to Triple(Pro2Commands.gateRangeAddress(), ParamKind.GATE_RANGE, channel),
-                "/h_${sid}_${channel}_gateatk" to Triple(Pro2Commands.gateAttackAddress(), ParamKind.GATE_ATTACK, channel),
-                "/h_${sid}_${channel}_gatehold" to Triple(Pro2Commands.gateHoldAddress(), ParamKind.GATE_HOLD, channel),
-                "/h_${sid}_${channel}_gaterel" to Triple(Pro2Commands.gateReleaseAddress(), ParamKind.GATE_RELEASE, channel),
-                "/h_${sid}_${channel}_gatetrans" to Triple(Pro2Commands.gateTransientAddress(), ParamKind.GATE_TRANSIENT, channel),
-                "/h_${sid}_${channel}_gatefreq" to Triple(Pro2Commands.gateFilterFreqAddress(), ParamKind.GATE_FILTER_FREQ, channel),
-                "/h_${sid}_${channel}_gateflt" to Triple(Pro2Commands.gateFiltersInAddress(), ParamKind.GATE_FILTERS_IN, channel),
-            )
-            withContext(Dispatchers.Main) {
-                for ((handle, info) in subs) subscriptions[handle] = Subscription(info.third, info.second)
-            }
-            for ((handle, info) in subs) {
-                val (path, kind, ch) = info
-                try {
-                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, ch, ch, token))
-                } catch (e: Exception) {
-                    // не критично
-                }
-                delay(2)
-            }
-        }
-    }
 
     /** Разбор blob-значения из push-обновления по подписке. См. примечание к subscribeAll(). */
-    private fun handleSubscribedValue(sub: Subscription, blob: ByteArray) {
+    internal fun handleSubscribedValue(sub: Subscription, blob: ByteArray) {
         // ПОДТВЕРЖДЕНО реальным захватом трафика нашего же приложения (подписка +
         // движение фейдеров): числа в blob идут в LITTLE-ENDIAN, а не big-endian,
         // как я предполагал раньше без проверки. Это отличается от команд
@@ -2162,7 +1393,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Разбор push-обновления для мастер-каналов - НЕ подтверждено реальным захватом. */
-    private fun handleMasterSubscribedValue(sub: Subscription, blob: ByteArray) {
+    internal fun handleMasterSubscribedValue(sub: Subscription, blob: ByteArray) {
         when (sub.kind) {
             ParamKind.FADER -> {
                 if (blob.size < 4) return
@@ -2202,7 +1433,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Разбор push-обновления для aux returns - НЕ подтверждено реальным захватом. */
-    private fun handleAuxReturnSubscribedValue(sub: Subscription, blob: ByteArray) {
+    internal fun handleAuxReturnSubscribedValue(sub: Subscription, blob: ByteArray) {
         when (sub.kind) {
             ParamKind.FADER -> {
                 if (blob.size < 4) return
@@ -2253,7 +1484,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Разбор push-обновления для 16 aux-шин - НЕ подтверждено реальным захватом. */
-    private fun handleAuxBusSubscribedValue(sub: Subscription, blob: ByteArray) {
+    internal fun handleAuxBusSubscribedValue(sub: Subscription, blob: ByteArray) {
         when (sub.kind) {
             ParamKind.FADER -> {
                 if (blob.size < 4) return
@@ -2325,7 +1556,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Разбор push-обновления для VCA-групп - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным захватом трафика iPad. */
-    private fun handleVcaSubscribedValue(sub: Subscription, blob: ByteArray) {
+    internal fun handleVcaSubscribedValue(sub: Subscription, blob: ByteArray) {
         when (sub.kind) {
             ParamKind.FADER -> {
                 if (blob.size < 4) return
@@ -2376,12 +1607,91 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Push-обновление членства одного "ребёнка" в VCA-группе (см. заметку
+     * в VcaData/subscribeVcaMembers про степень подтверждённости).
+     */
+    internal fun handleVcaMemberSubscribedValue(sub: VcaMemberSub, blob: ByteArray) {
+        val member = blob.size >= 4 &&
+            ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+        val vca = ConnectionHolder.vcaData.getOrNull(sub.vcaIndex) ?: return
+        when (sub.childType) {
+            "input" -> vca.memberInput.getOrNull(sub.childIndex)?.let { vca.memberInput[sub.childIndex] = member }
+            "submix" -> vca.memberSubMix.getOrNull(sub.childIndex)?.let { vca.memberSubMix[sub.childIndex] = member }
+            "auxreturn" -> vca.memberAuxReturn.getOrNull(sub.childIndex)?.let { vca.memberAuxReturn[sub.childIndex] = member }
+            "main" -> vca.memberMain.getOrNull(sub.childIndex)?.let { vca.memberMain[sub.childIndex] = member }
+            "master" -> vca.memberMaster.getOrNull(sub.childIndex)?.let { vca.memberMaster[sub.childIndex] = member }
+        }
+        // Если экран VCA members сейчас открыт именно для этой группы -
+        // подкрашиваем кнопку вживую, а не только на будущее открытие.
+        if (openVcaMembersIndex == sub.vcaIndex) {
+            val btn = vcaMemberButtons["${sub.childType}:${sub.childIndex}"] ?: return
+            btn.setBackgroundColor(Color.parseColor(if (member) "#ff9f0a" else "#3a3a3c"))
+            btn.setTextColor(Color.parseColor(if (member) "#000000" else "#ffffff"))
+        }
+    }
+        when (sub.kind) {
+            ParamKind.FADER -> {
+                if (blob.size < 4) return
+                val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                    .float.coerceIn(0f, 1f)
+                ConnectionHolder.mainOutData[sub.channel].fader = level
+                val ui = mainOutStrips.getOrNull(sub.channel) ?: return
+                ui.suppressEvents = true
+                ui.fader.progress = (level * 1000).toInt()
+                ui.levelText.text = "%.2f".format(level)
+                ui.suppressEvents = false
+            }
+            ParamKind.MUTE -> {
+                val muted = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.mainOutData[sub.channel].mutedLocal = muted
+                val ui = mainOutStrips.getOrNull(sub.channel) ?: return
+                ui.mutedLocal = muted
+                ui.muteButton.setBackgroundColor(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
+            }
+            ParamKind.SOLO -> {
+                val soloed = blob.size >= 4 &&
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                val ui = mainOutStrips.getOrNull(sub.channel) ?: return
+                ui.suppressEvents = true
+                ui.soloButton.isChecked = soloed
+                ui.soloButton.setBackgroundColor(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
+                ui.suppressEvents = false
+            }
+            ParamKind.NAME -> {
+                val name = String(blob, Charsets.US_ASCII).trimEnd('\u0000')
+                if (name.isBlank()) return
+                ConnectionHolder.mainOutData.getOrNull(sub.channel)?.name = name
+                mainOutStrips.getOrNull(sub.channel)?.labelView?.text = name
+            }
+            ParamKind.COLOUR -> {
+                if (blob.size >= 4) {
+                    val r = blob[0].toInt() and 0xFF
+                    val g = blob[1].toInt() and 0xFF
+                    val b = blob[2].toInt() and 0xFF
+                    val a = blob[3].toInt() and 0xFF
+                    val argb = (a shl 24) or (r shl 16) or (g shl 8) or b
+                    ConnectionHolder.mainOutData.getOrNull(sub.channel)?.colourArgb = argb
+                    mainOutStrips.getOrNull(sub.channel)?.headerView?.setBackgroundColor(argb)
+                }
+            }
+            ParamKind.METER -> {
+                if (blob.isNotEmpty()) {
+                    val level = ((blob[0].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
+                    updateSimpleStripMeter(mainOutStrips, sub.channel, level)
+                }
+            }
+            else -> {}
+        }
+    }
+
     /** Общая функция подсветки метра для мастера/aux returns/aux-шин (все используют SimpleStripUi). */
     private fun updateSimpleStripMeter(list: List<SimpleStripUi>, index: Int, level: Float) {
         val ui = list.getOrNull(index) ?: return
-        // Тот же переход на scaleY, что и у обычных каналов - см. заметку
-        // в updateMeterUi про исправление зависания метров.
-        ui.meterBar.scaleY = level.coerceIn(0f, 1f)
+        // Тот же переход на layoutParams.height, что и у обычных каналов -
+        // см. заметку в updateMeterUi.
+        applyMeterHeight(ui.meterBar, level)
         val color = when {
             level > 0.85f -> "#ff3b30"
             level > 0.6f -> "#ff9f0a"
@@ -2434,33 +1744,51 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateMeterUi(channel: Int, level: Float) {
-        val ui = channels.getOrNull(channel) ?: return
-        // ВАЖНО (исправление зависания метров): раньше здесь мутировался
-        // layoutParams.height - это ЗАПУСКАЕТ ПОЛНЫЙ ПЕРЕСЧЁТ layout всей
-        // иерархии родителей на каждое обновление. Метры приходят намного
-        // чаще всего остального (десятки раз в секунду на каждый из 56
-        // каналов) - при таком объёме полных re-layout'ов главный поток не
-        // успевал, из-за чего метры визуально "зависали"/дёргались. Теперь
-        // используем scaleY - это чисто визуальное преобразование
-        // (аппаратное ускорение, без re-layout), высота метра всегда
-        // match_parent, просто видимая часть масштабируется.
-        val clamped = level.coerceIn(0f, 1f)
-        ui.meterBar.scaleY = clamped
-
         val color = when {
             level > 0.85f -> "#ff3b30" // красный - близко к перегрузке
             level > 0.6f -> "#ff9f0a"  // жёлтый/оранжевый
             else -> "#34c759"          // зелёный - нормальный уровень
         }
+
+        // В мониторном режиме список инженерских строк (channels) вообще не
+        // строится (см. onCreateMonitor) - поэтому это обновление стоит
+        // ДО раннего return по нему, иначе индикация сигнала в мониторном
+        // режиме никогда бы не срабатывала.
+        monitorChannelStrips.getOrNull(channel)?.let { mui ->
+            applyMeterHeight(mui.meterBar, level)
+            mui.meterBar.setBackgroundColor(Color.parseColor(color))
+        }
+
+        val ui = channels.getOrNull(channel) ?: return
+        // ВАЖНО: раньше здесь был scaleY-подход (чисто визуальное
+        // преобразование, без re-layout) - задумывался как решение
+        // "зависания метров", но, судя по всему, в общем виде списка
+        // каналов это почему-то не отрисовывалось вообще (в отличие от
+        // детального экрана - там работало). Причину найти по коду не
+        // удалось, а сама изначальная проблема "зависания" уже отдельно
+        // решена на уровне приёма UDP-пакетов (fire-and-forget вместо
+        // блокирующего ожидания на главном потоке) - так что возвращаемся
+        // к простому и надёжному layoutParams.height.
+        applyMeterHeight(ui.meterBar, level)
         ui.meterBar.setBackgroundColor(Color.parseColor(color))
 
         // Если детальный экран для этого канала открыт - синхронизируем и его метр.
         if (openDetailChannel == channel) {
             val dv = detailViews ?: return
-            dv.meterBar.scaleY = clamped
+            applyMeterHeight(dv.meterBar, level)
             dv.meterBar.setBackgroundColor(Color.parseColor(color))
         }
     }
+
+    private fun applyMeterHeight(meterBar: android.view.View, level: Float) {
+        val parent = meterBar.parent as? android.view.View ?: return
+        val totalHeight = parent.height
+        if (totalHeight <= 0) return
+        val params = meterBar.layoutParams
+        params.height = (totalHeight * level.coerceIn(0f, 1f)).toInt().coerceAtLeast(0)
+        meterBar.layoutParams = params
+    }
+
 
     // Если сейчас открыт детальный экран для какого-то канала - храним ссылку
     // на его элементы, чтобы push-обновления могли их вживую подкручивать,
@@ -2578,9 +1906,9 @@ class MainActivity : AppCompatActivity() {
         // Если в мониторном режиме сейчас открыта именно эта шина - тоже
         // подкручиваем соответствующий канал вживую.
         if (appMode == MODE_MONITOR && monitorSelectedBus == busNumber - 1) {
-            val pair = monitorChannelStrips.getOrNull(channel) ?: return
-            pair.first.progress = (level * 1000).toInt()
-            pair.second.text = "%.2f".format(level)
+            val ui = monitorChannelStrips.getOrNull(channel) ?: return
+            ui.seek.progress = (level * 1000).toInt()
+            ui.valueText.text = "%.2f".format(level)
         }
     }
 
@@ -2713,10 +2041,15 @@ class MainActivity : AppCompatActivity() {
         channelDetailContainer.addView(view)
         channelDetailContainer.visibility = android.view.View.VISIBLE
 
+        openVcaMembersIndex = vcaIndex
+        vcaMemberButtons.clear()
+
         view.findViewById<TextView>(R.id.textVcaMembersTitle).text = "VCA ${vcaIndex + 1} MEMBERS"
         view.findViewById<Button>(R.id.btnVcaMembersBack).setOnClickListener {
             channelDetailContainer.visibility = android.view.View.GONE
             channelDetailContainer.removeAllViews()
+            openVcaMembersIndex = null
+            vcaMemberButtons.clear()
         }
 
         val container = view.findViewById<android.widget.LinearLayout>(R.id.containerVcaMembers)
@@ -2733,7 +2066,9 @@ class MainActivity : AppCompatActivity() {
             container.addView(header)
         }
 
-        fun memberGrid(labels: List<String>, onToggle: (index: Int, member: Boolean) -> Unit) {
+        // childType - ключ для хранения в ConnectionHolder.vcaData и для
+        // live-обновления кнопки при входящем push (см. handleVcaMemberSubscribedValue).
+        fun memberGrid(labels: List<String>, childType: String, initial: (Int) -> Boolean, onToggle: (index: Int, member: Boolean) -> Unit) {
             var row: android.widget.LinearLayout? = null
             for ((i, label) in labels.withIndex()) {
                 if (i % 4 == 0) {
@@ -2745,15 +2080,15 @@ class MainActivity : AppCompatActivity() {
                         android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply { bottomMargin = 6 })
                 }
-                var memberState = false
+                var memberState = initial(i)
                 val btn = Button(this).apply {
                     text = label
                     textSize = 10f
                     minHeight = 0
                     backgroundTintList = null
                     setPadding(4, 12, 4, 12)
-                    setTextColor(Color.parseColor("#ffffff"))
-                    setBackgroundColor(Color.parseColor("#3a3a3c"))
+                    setTextColor(Color.parseColor(if (memberState) "#000000" else "#ffffff"))
+                    setBackgroundColor(Color.parseColor(if (memberState) "#ff9f0a" else "#3a3a3c"))
                     layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                         .apply { marginEnd = 4 }
                     setOnClickListener {
@@ -2763,35 +2098,52 @@ class MainActivity : AppCompatActivity() {
                         onToggle(i, memberState)
                     }
                 }
+                vcaMemberButtons["$childType:$i"] = btn
                 row?.addView(btn)
             }
         }
 
+        val vca = ConnectionHolder.vcaData[vcaIndex]
+
         sectionHeader("ВХОДНЫЕ КАНАЛЫ (1-56)")
-        memberGrid((1..56).map { "CH $it" }) { i, member ->
-            sendRawAsync(Pro2Commands.setVcaChildInput(i, vcaIndex, true))
+        memberGrid((1..56).map { n ->
+            val realName = ConnectionHolder.channelData.getOrNull(n - 1)?.name?.takeIf { it.isNotBlank() }
+            if (realName != null) "$n: $realName" else "CH $n"
+        }, "input", { i -> vca.memberInput.getOrElse(i) { false } }) { i, member ->
+            sendRawAsync(Pro2Commands.setVcaChildInput(i, vcaIndex, member))
         }
 
         sectionHeader("AUX-ШИНЫ (1-16)")
-        memberGrid((1..16).map { "BUS $it" }) { i, member ->
-            sendRawAsync(Pro2Commands.setVcaChildSubMix(i, vcaIndex, true))
+        memberGrid((1..16).map { n ->
+            val realName = ConnectionHolder.auxBusData.getOrNull(n - 1)?.name?.takeIf { it.isNotBlank() }
+            if (realName != null) "$n: $realName" else "BUS $n"
+        }, "submix", { i -> vca.memberSubMix.getOrElse(i) { false } }) { i, member ->
+            sendRawAsync(Pro2Commands.setVcaChildSubMix(i, vcaIndex, member))
         }
 
         sectionHeader("AUX RETURNS (1-8)")
-        memberGrid((1..8).map { "AUX $it" }) { i, member ->
-            sendRawAsync(Pro2Commands.setVcaChildAuxReturn(i, vcaIndex, true))
+        memberGrid((1..8).map { n ->
+            val realName = ConnectionHolder.auxReturnData.getOrNull(n - 1)?.name?.takeIf { it.isNotBlank() }
+            if (realName != null) "$n: $realName" else "AUX $n"
+        }, "auxreturn", { i -> vca.memberAuxReturn.getOrElse(i) { false } }) { i, member ->
+            sendRawAsync(Pro2Commands.setVcaChildAuxReturn(i, vcaIndex, member))
         }
 
         sectionHeader("MAIN OUTS (1-8)")
-        memberGrid((1..8).map { "MAIN $it" }) { i, member ->
-            sendRawAsync(Pro2Commands.setVcaChildMain(i, vcaIndex, true))
+        memberGrid((1..8).map { "MAIN $it" }, "main", { i -> vca.memberMain.getOrElse(i) { false } }) { i, member ->
+            sendRawAsync(Pro2Commands.setVcaChildMain(i, vcaIndex, member))
         }
 
         sectionHeader("МАСТЕР")
-        memberGrid(listOf("MASTER L", "MASTER R", "MASTER C")) { i, member ->
+        memberGrid(listOf("MASTER L", "MASTER R", "MASTER C"), "master", { i -> vca.memberMaster.getOrElse(i) { false } }) { i, member ->
             val letter = listOf("L", "R", "C")[i]
-            sendRawAsync(Pro2Commands.setVcaChildMaster(letter, vcaIndex, true))
+            sendRawAsync(Pro2Commands.setVcaChildMaster(letter, vcaIndex, member))
         }
+
+        // Запрашиваем свежее состояние с пульта - кнопки выше построены по
+        // тому, что уже было известно локально (может быть пусто при первом
+        // открытии), а push-ответы дальше подкрасят их правильно вживую.
+        subscribeVcaMembers(vcaIndex)
     }
 
     private fun openChannelDetail(channel: Int) {
@@ -2857,6 +2209,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         val detailSoloB = view.findViewById<ToggleButton>(R.id.detailSoloB)
+        // Убрано по просьбе - не нужна пользователю сейчас.
+        detailSoloB.visibility = android.view.View.GONE
         detailSoloB.backgroundTintList = null
         detailSoloB.stateListAnimator = null
         val soloBData = ConnectionHolder.channelData[channel]
@@ -4044,7 +3398,7 @@ class MainActivity : AppCompatActivity() {
         updateDynamicsKnobUi(detailGateDynViews, kind, level)
     }
 
-    private fun updateFaderUi(channel: Int, level: Float) {
+    internal fun updateFaderUi(channel: Int, level: Float) {
         val ui = channels.getOrNull(channel)
         // Пока пользователь реально держит палец на фейдере - не даём
         // push-обновлению (в т.ч. запоздавшему "эхо" наших же команд)
@@ -4067,7 +3421,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateMuteUi(channel: Int, muted: Boolean) {
+    internal fun updateMuteUi(channel: Int, muted: Boolean) {
         ConnectionHolder.channelData[channel].mutedLocal = muted
         val ui = channels.getOrNull(channel) ?: return
         ui.mutedLocal = muted
@@ -4081,7 +3435,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateSoloUi(channel: Int, soloed: Boolean) {
+    internal fun updateSoloUi(channel: Int, soloed: Boolean) {
         ConnectionHolder.channelData[channel].soloed = soloed
         val ui = channels.getOrNull(channel) ?: return
         ui.suppressEvents = true
@@ -4100,7 +3454,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateGainUi(channel: Int, level: Float) {
+    internal fun updateGainUi(channel: Int, level: Float) {
         ConnectionHolder.channelData[channel].gain = level
         // Ручку GAIN убрали из основной полосы канала - теперь она живёт
         // только в детальном экране (вкладка INPUT), поэтому обновляем её
@@ -4120,7 +3474,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateNameUi(channel: Int, name: String) {
+    internal fun updateNameUi(channel: Int, name: String) {
         if (name.isBlank()) return
         ConnectionHolder.channelData[channel].name = name
         channels.getOrNull(channel)?.labelView?.text = name
@@ -4491,22 +3845,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendRawAsync(packet: ByteArray) {
-        val address = consoleAddress ?: return
-        val sock = socket ?: return
-        val port = consolePort
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                sendRaw(sock, address, port, packet)
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) { textStatus.text = "Send error: ${e.message}" }
-            }
-        }
-    }
 
-    private fun sendRaw(socket: DatagramSocket, address: InetAddress, port: Int, packet: ByteArray) {
-        socket.send(DatagramPacket(packet, packet.size, address, port))
-    }
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {

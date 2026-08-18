@@ -523,6 +523,35 @@ object Pro2Commands {
     fun getVcaName(vcaIndex: Int): ByteArray =
         OscUtil.encode(vcaNameAddress(), listOf(vcaIndex))
 
+    // === Main Outs (в самом пульте это "matrix out", 8 позиций) - базовая
+    // полоса (фейдер/mute/solo/имя/цвет/метр). enFaderLevel подтверждён
+    // сторонним датасетом; mute/solo/цвет НЕ найдены в том датасете вообще
+    // (пробел в их обходе), взяты по аналогии с master/aux/VCA - там та же
+    // схема имён ("enFaderMute"/"enFaderSolo"/"enChannelColour") везде
+    // одинакова, так что предположение обоснованное, но не подтверждено
+    // напрямую для этой конкретной группы. У Main Outs также есть
+    // 6-полосный EQ и отдельный расширенный компрессор (range/soft clip) -
+    // это отдельная большая задача, пока не реализовано.
+    private const val MAIN_OUT_GROUP = "enVirtualMainOuts"
+    fun mainOutFaderAddress() = "/enPPCFaderMessage/$MAIN_OUT_GROUP/enFaderLevel"
+    fun mainOutMuteAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enFaderMute"
+    fun mainOutSoloAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enFaderSolo"
+    fun mainOutNameAddress() = "/enPPCStringMessage/$MAIN_OUT_GROUP/enPathname"
+    fun mainOutColourAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enChannelColour"
+    fun mainOutMeterAddress() = "/enPPCMeterMessage/$MAIN_OUT_GROUP/enMeter"
+
+    fun setMainOutFader(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutFaderAddress(), listOf(index, level.coerceIn(0f, 1f)))
+
+    fun setMainOutMute(index: Int, muted: Boolean): ByteArray =
+        OscUtil.encode(mainOutMuteAddress(), listOf(index, if (muted) 1 else 0))
+
+    fun setMainOutSolo(index: Int, soloed: Boolean): ByteArray =
+        OscUtil.encode(mainOutSoloAddress(), listOf(index, if (soloed) 1 else 0))
+
+    fun setMainOutColour(index: Int, argbColor: Int): ByteArray =
+        OscUtil.encode(mainOutColourAddress(), listOf(index, argbColor))
+
     // === Посыл канала на aux-шину (НЕ подтверждено реальным захватом) ===
     // В самом пульте это называется "SubSend", не "AuxSend" - у каждой из 16
     // шин свой отдельный параметр (индекс шины зашит в имя, а не передаётся

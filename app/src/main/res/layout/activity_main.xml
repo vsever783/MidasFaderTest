@@ -202,6 +202,20 @@
                 android:paddingStart="4dp"
                 android:paddingEnd="4dp"
                 android:visibility="gone" />
+
+            <!-- Main Outs (8 шт., "matrix out" на самом пульте) - фейдер/
+                 mute/solo/имя/цвет ПОДТВЕРЖДЕНЫ ЧАСТИЧНО (fader - сторонним
+                 датасетом; mute/solo/цвет - по аналогии с другими группами,
+                 не найдены явно в том же датасете). EQ/компрессор Main Outs
+                 пока не реализованы - отдельная большая задача. -->
+            <LinearLayout
+                android:id="@+id/containerMainOuts"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:orientation="horizontal"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp"
+                android:visibility="gone" />
         </FrameLayout>
     </HorizontalScrollView>
 
