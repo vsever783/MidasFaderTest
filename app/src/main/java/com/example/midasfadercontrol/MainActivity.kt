@@ -218,10 +218,12 @@ class MainActivity : AppCompatActivity() {
     private val vcaMemberButtons = mutableMapOf<String, Button>()
     // Открытый экран "MAIN N DETAIL" (EQ/компрессор) - для live-обновления
     // ползунков при входящих push, пока экран виден.
-    private var openMainOutDetailIndex: Int? = null
-    private val mainOutDetailControls = mutableMapOf<String, SeekBar>()
-    private var openAuxBusDetailIndex: Int? = null
-    private val auxBusDetailControls = mutableMapOf<String, SeekBar>()
+    // Экран деталей aux-шины/Main Out (общий, group_detail.xml) - какая
+    // группа и какой индекс сейчас открыты (для live-обновления крутилок
+    // push-ответами), плюс сами крутилки по ключу "тип:полоса".
+    private var openGroupDetailKind: String? = null // "aux" | "mainout"
+    private var openGroupDetailIndex: Int? = null
+    private val groupDetailKnobs = mutableMapOf<String, RotaryKnobView>()
     private var monitorChannelLabels: Array<TextView?> = arrayOfNulls(56)
     private val monitorBankButtons = mutableListOf<Button>()
     private var monitorBankStart = 0
@@ -1586,8 +1588,8 @@ class MainActivity : AppCompatActivity() {
                     ParamKind.COMP_MAKEUP -> data.compMakeup = level
                     else -> {}
                 }
-                if (openAuxBusDetailIndex == sub.channel) {
-                    auxBusDetailControls["${sub.kind}:${sub.eqBand}"]?.let { seek -> seek.progress = (level * 1000).toInt() }
+                if (openGroupDetailKind == "aux" && openGroupDetailIndex == sub.channel) {
+                    groupDetailKnobs["${sub.kind}:${sub.eqBand}"]?.value = level
                 }
             }
             else -> {}
@@ -1742,10 +1744,8 @@ class MainActivity : AppCompatActivity() {
                     else -> {}
                 }
                 // Если детальный экран этого Main Out сейчас открыт - обновляем живьём.
-                if (openMainOutDetailIndex == sub.channel) {
-                    mainOutDetailControls["${sub.kind}:${sub.eqBand}"]?.let { seek ->
-                        seek.progress = (level * 1000).toInt()
-                    }
+                if (openGroupDetailKind == "mainout" && openGroupDetailIndex == sub.channel) {
+                    groupDetailKnobs["${sub.kind}:${sub.eqBand}"]?.value = level
                 }
             }
             else -> {}
@@ -2213,268 +2213,427 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Детальный экран Main Out: 6-полосный EQ + компрессор + HP/LP/notch
-     * фильтры. НЕ подтверждено реальным захватом - адреса из датасета
-     * muffeeee/midas-pro-series-osc-commands (см. заметки в Pro2Commands.kt
-     * у функций mainOutEq... и mainOutComp...). Значения показаны как есть
-     * (0.00-1.00), без пересчёта в дБ/Гц - калибровочных пар для Main Out
-     * ещё нет (в отличие от канального компрессора).
+     * Общий блок компрессора (график + сетка крутилок) для aux-шины и Main
+     * Out - визуально та же структура, что и buildDynamicsBlock у канала
+     * (тот же TransferCurveView, тот же RotaryKnobView, та же сетка 2 в
+     * ряд), но без GATE (у этих групп его нет) и без калиброванных
+     * дБ/мс-подписей (для канала они подтверждены отдельно, здесь взяты бы
+     * "с потолка" - честнее показывать сырые 0.00-1.00).
+     * НЕ подтверждено реальным захватом.
      */
-    private fun openMainOutDetail(index: Int) {
-        val view = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#000000"))
-            setPadding(16, 16, 16, 40)
-        }
-        val scroll = android.widget.ScrollView(this).apply { addView(view) }
-        channelDetailContainer.removeAllViews()
-        channelDetailContainer.addView(scroll)
-        channelDetailContainer.visibility = android.view.View.VISIBLE
-
-        openMainOutDetailIndex = index
-        mainOutDetailControls.clear()
-
-        val topBar = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
-        }
-        val backBtn = Button(this).apply {
-            text = "⟵"
-            setOnClickListener {
-                channelDetailContainer.visibility = android.view.View.GONE
-                channelDetailContainer.removeAllViews()
-                openMainOutDetailIndex = null
-                mainOutDetailControls.clear()
-            }
-        }
+    private fun buildGroupCompBlock(
+        container: android.widget.LinearLayout,
+        data: EqCompHolder,
+        sendRatio: (Float) -> Unit,
+        sendAttack: (Float) -> Unit,
+        sendRelease: (Float) -> Unit,
+        sendThreshold: (Float) -> Unit,
+        sendRange: (Float) -> Unit,
+        sendMakeup: (Float) -> Unit,
+        sendSoftClip: (Float) -> Unit
+    ) {
+        val accent = Color.parseColor("#ff9f0a")
         val title = TextView(this).apply {
-            text = "MAIN ${index + 1} DETAIL"
-            setTextColor(Color.parseColor("#ff9f0a"))
-            textSize = 18f
+            text = "COMPRESSOR"
+            setTextColor(accent)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(16, 0, 0, 0)
+            textSize = 16f
         }
-        topBar.addView(backBtn)
-        topBar.addView(title)
-        view.addView(topBar)
+        container.addView(title, android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = 8 })
 
-        val data = ConnectionHolder.mainOutData[index]
-
-        fun sectionHeader(text: String) {
-            view.addView(TextView(this).apply {
-                this.text = text
-                setTextColor(Color.parseColor("#8e8e93"))
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                textSize = 12f
-                setPadding(0, 24, 0, 6)
-            })
+        val graph = TransferCurveView(this).apply {
+            mode = TransferCurveView.Mode.COMPRESSOR
+            accentColor = accent
+            threshold = data.compThreshold
+            ratioOrRange = data.compRatio
         }
+        container.addView(graph, android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+            (130 * resources.displayMetrics.density).toInt()
+        ).apply { bottomMargin = 12 })
 
-        fun addSlider(key: String, label: String, initial: Float, onChange: (Float) -> Unit) {
-            val row = android.widget.LinearLayout(this).apply {
-                orientation = android.widget.LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER_VERTICAL
+        val params = listOf(
+            Triple("RATIO", data.compRatio, sendRatio),
+            Triple("THRESHOLD", data.compThreshold, sendThreshold),
+            Triple("ATTACK", data.compAttack, sendAttack),
+            Triple("RELEASE", data.compRelease, sendRelease),
+            Triple("RANGE", data.compRange, sendRange),
+            Triple("MAKEUP", data.compMakeup, sendMakeup),
+            Triple("SOFT CLIP", data.compSoftClip, sendSoftClip)
+        )
+        var row: android.widget.LinearLayout? = null
+        for ((index, item) in params.withIndex()) {
+            val (label, initial, send) = item
+            if (index % 2 == 0) {
+                row = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
+                container.addView(row, android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = 8 })
             }
-            val labelView = TextView(this).apply {
-                text = label
-                setTextColor(Color.parseColor("#ffffff"))
-                textSize = 12f
-                layoutParams = android.widget.LinearLayout.LayoutParams(160, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
-            }
-            val valueView = TextView(this).apply {
-                text = "%.2f".format(initial)
-                setTextColor(Color.parseColor("#ff9f0a"))
-                textSize = 11f
-                layoutParams = android.widget.LinearLayout.LayoutParams(60, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
-            }
-            val seek = SeekBar(this).apply {
-                max = 1000
-                progress = (initial * 1000).toInt()
-                progressTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#ff9f0a"))
-                thumbTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+            val cell = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
                 layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                        if (!fromUser) return
-                        val level = progress / 1000f
-                        valueView.text = "%.2f".format(level)
-                        onChange(level)
-                    }
-                    override fun onStartTrackingTouch(sb: SeekBar?) {}
-                    override fun onStopTrackingTouch(sb: SeekBar?) {}
-                })
             }
-            mainOutDetailControls[key] = seek
-            row.addView(labelView)
-            row.addView(seek)
-            row.addView(valueView)
-            view.addView(row, android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 4 })
-        }
-
-        sectionHeader("КОМПРЕССОР")
-        addSlider("${ParamKind.COMP_RATIO}:0", "Ratio", data.compRatio) { l -> data.compRatio = l; sendRawAsync(Pro2Commands.setMainOutCompRatio(index, l)) }
-        addSlider("${ParamKind.COMP_ATTACK}:0", "Attack", data.compAttack) { l -> data.compAttack = l; sendRawAsync(Pro2Commands.setMainOutCompAttack(index, l)) }
-        addSlider("${ParamKind.COMP_RELEASE}:0", "Release", data.compRelease) { l -> data.compRelease = l; sendRawAsync(Pro2Commands.setMainOutCompRelease(index, l)) }
-        addSlider("${ParamKind.COMP_THRESHOLD}:0", "Threshold", data.compThreshold) { l -> data.compThreshold = l; sendRawAsync(Pro2Commands.setMainOutCompThreshold(index, l)) }
-        addSlider("range:0", "Range", data.compRange) { l -> data.compRange = l; sendRawAsync(Pro2Commands.setMainOutCompRange(index, l)) }
-        addSlider("${ParamKind.COMP_MAKEUP}:0", "Makeup Gain", data.compMakeup) { l -> data.compMakeup = l; sendRawAsync(Pro2Commands.setMainOutCompMakeup(index, l)) }
-        addSlider("softclip:0", "Soft Clip", data.compSoftClip) { l -> data.compSoftClip = l; sendRawAsync(Pro2Commands.setMainOutCompSoftClip(index, l)) }
-
-        sectionHeader("ФИЛЬТРЫ")
-        addSlider("hp:0", "HP Freq", data.hpFreq) { l -> data.hpFreq = l; sendRawAsync(Pro2Commands.setMainOutHpFreq(index, l)) }
-        addSlider("lp:0", "LP Freq", data.lpFreq) { l -> data.lpFreq = l; sendRawAsync(Pro2Commands.setMainOutLpFreq(index, l)) }
-        addSlider("lownotch:0", "Low Notch", data.lowNotchFreq) { l -> data.lowNotchFreq = l; sendRawAsync(Pro2Commands.setMainOutLowNotchFreq(index, l)) }
-        addSlider("highnotch:0", "High Notch", data.highNotchFreq) { l -> data.highNotchFreq = l; sendRawAsync(Pro2Commands.setMainOutHighNotchFreq(index, l)) }
-        addSlider("delay:0", "Output Delay", data.outputDelay) { l -> data.outputDelay = l; sendRawAsync(Pro2Commands.setMainOutDelay(index, l)) }
-
-        sectionHeader("EQ - 6 ПОЛОС")
-        for (band in 0 until 6) {
-            view.addView(TextView(this).apply {
-                text = "Band ${band + 1}"
-                setTextColor(Color.parseColor("#ff9f0a"))
+            val cellLabel = TextView(this).apply {
+                text = label
+                setTextColor(Color.parseColor("#8e8e93"))
                 textSize = 11f
-                setPadding(0, 10, 0, 2)
-            })
-            addSlider("${ParamKind.EQ_FREQ}:$band", "Freq", data.eqFreq[band]) { l -> data.eqFreq[band] = l; sendRawAsync(Pro2Commands.setMainOutEqFreq(index, band, l)) }
-            addSlider("${ParamKind.EQ_GAIN}:$band", "Gain", data.eqGain[band]) { l -> data.eqGain[band] = l; sendRawAsync(Pro2Commands.setMainOutEqGain(index, band, l)) }
-            addSlider("${ParamKind.EQ_WIDTH}:$band", "Width", data.eqWidth[band]) { l -> data.eqWidth[band] = l; sendRawAsync(Pro2Commands.setMainOutEqWidth(index, band, l)) }
+            }
+            val knob = RotaryKnobView(this).apply {
+                value = initial
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    (58 * resources.displayMetrics.density).toInt(),
+                    (58 * resources.displayMetrics.density).toInt()
+                ).apply { topMargin = 4; bottomMargin = 4 }
+            }
+            val valueText = TextView(this).apply {
+                text = "%.2f".format(initial)
+                setTextColor(accent)
+                textSize = 12f
+            }
+            knob.onValueChanged = { v ->
+                valueText.text = "%.2f".format(v)
+                if (label == "RATIO") graph.ratioOrRange = v
+                if (label == "THRESHOLD") graph.threshold = v
+                send(v)
+            }
+            cell.addView(cellLabel)
+            cell.addView(knob)
+            cell.addView(valueText)
+            row?.addView(cell)
+            val liveKind = when (label) {
+                "RATIO" -> ParamKind.COMP_RATIO
+                "THRESHOLD" -> ParamKind.COMP_THRESHOLD
+                "ATTACK" -> ParamKind.COMP_ATTACK
+                "RELEASE" -> ParamKind.COMP_RELEASE
+                "MAKEUP" -> ParamKind.COMP_MAKEUP
+                else -> null // RANGE и SOFT CLIP пока не подписаны на push - см. subscribeAuxBusExtras/subscribeMainOutExtras
+            }
+            if (liveKind != null) groupDetailKnobs["$liveKind:0"] = knob
         }
-
-        subscribeMainOutExtras(index)
     }
 
     /**
-     * Детальный экран aux-шины: 6-полосный EQ + компрессор + HP/LP/notch
-     * фильтры - структурно идентичен openMainOutDetail (та же вёрстка, тот
-     * же helper addSlider), отличаются только адреса и источник данных.
-     * НЕ подтверждено реальным захватом.
+     * Общий блок EQ (6 полос) для aux-шины и Main Out - та же крутилочная
+     * сетка, что и у компрессора выше (не интерактивный перетаскиваемый
+     * график, как у канала - EqCurveView канала жёстко заточен под 4
+     * полосы, трогать рискованно). НЕ подтверждено реальным захватом.
      */
-    private fun openAuxBusDetail(index: Int) {
-        val view = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#000000"))
-            setPadding(16, 16, 16, 40)
-        }
-        val scroll = android.widget.ScrollView(this).apply { addView(view) }
-        channelDetailContainer.removeAllViews()
-        channelDetailContainer.addView(scroll)
-        channelDetailContainer.visibility = android.view.View.VISIBLE
-
-        openAuxBusDetailIndex = index
-        auxBusDetailControls.clear()
-
-        val topBar = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
-        }
-        val backBtn = Button(this).apply {
-            text = "⟵"
-            setOnClickListener {
-                channelDetailContainer.visibility = android.view.View.GONE
-                channelDetailContainer.removeAllViews()
-                openAuxBusDetailIndex = null
-                auxBusDetailControls.clear()
-            }
-        }
+    private fun buildGroupEqBlock(
+        container: android.widget.LinearLayout,
+        data: EqCompHolder,
+        sendFreq: (Int, Float) -> Unit,
+        sendGain: (Int, Float) -> Unit,
+        sendWidth: (Int, Float) -> Unit,
+        sendHp: (Float) -> Unit,
+        sendLp: (Float) -> Unit,
+        sendLowNotch: (Float) -> Unit,
+        sendHighNotch: (Float) -> Unit
+    ) {
+        val accent = Color.parseColor("#ff9f0a")
         val title = TextView(this).apply {
-            text = "BUS ${index + 1} DETAIL"
-            setTextColor(Color.parseColor("#ff9f0a"))
-            textSize = 18f
+            text = "EQ - 6 ПОЛОС"
+            setTextColor(accent)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(16, 0, 0, 0)
+            textSize = 16f
         }
-        topBar.addView(backBtn)
-        topBar.addView(title)
-        view.addView(topBar)
+        container.addView(title, android.widget.LinearLayout.LayoutParams(
+            android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = 8 })
 
-        val data = ConnectionHolder.auxBusData[index]
-
-        fun sectionHeader(text: String) {
-            view.addView(TextView(this).apply {
-                this.text = text
-                setTextColor(Color.parseColor("#8e8e93"))
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                textSize = 12f
-                setPadding(0, 24, 0, 6)
-            })
-        }
-
-        fun addSlider(key: String, label: String, initial: Float, onChange: (Float) -> Unit) {
-            val row = android.widget.LinearLayout(this).apply {
-                orientation = android.widget.LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER_VERTICAL
-            }
-            val labelView = TextView(this).apply {
-                text = label
-                setTextColor(Color.parseColor("#ffffff"))
-                textSize = 12f
-                layoutParams = android.widget.LinearLayout.LayoutParams(160, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
-            }
-            val valueView = TextView(this).apply {
-                text = "%.2f".format(initial)
-                setTextColor(Color.parseColor("#ff9f0a"))
-                textSize = 11f
-                layoutParams = android.widget.LinearLayout.LayoutParams(60, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
-            }
-            val seek = SeekBar(this).apply {
-                max = 1000
-                progress = (initial * 1000).toInt()
-                progressTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#ff9f0a"))
-                thumbTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
-                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                        if (!fromUser) return
-                        val level = progress / 1000f
-                        valueView.text = "%.2f".format(level)
-                        onChange(level)
-                    }
-                    override fun onStartTrackingTouch(sb: SeekBar?) {}
-                    override fun onStopTrackingTouch(sb: SeekBar?) {}
-                })
-            }
-            auxBusDetailControls[key] = seek
-            row.addView(labelView)
-            row.addView(seek)
-            row.addView(valueView)
-            view.addView(row, android.widget.LinearLayout.LayoutParams(
+        fun knobRow(items: List<Triple<String, Float, (Float) -> Unit>>, keys: List<String?>) {
+            val row = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
+            container.addView(row, android.widget.LinearLayout.LayoutParams(
                 android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 4 })
+            ).apply { bottomMargin = 10 })
+            for ((idx, item) in items.withIndex()) {
+                val (label, initial, send) = item
+                val cell = android.widget.LinearLayout(this).apply {
+                    orientation = android.widget.LinearLayout.VERTICAL
+                    gravity = android.view.Gravity.CENTER_HORIZONTAL
+                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                }
+                val cellLabel = TextView(this).apply {
+                    text = label
+                    setTextColor(Color.parseColor("#8e8e93"))
+                    textSize = 11f
+                }
+                val knob = RotaryKnobView(this).apply {
+                    value = initial
+                    layoutParams = android.widget.LinearLayout.LayoutParams(
+                        (52 * resources.displayMetrics.density).toInt(),
+                        (52 * resources.displayMetrics.density).toInt()
+                    ).apply { topMargin = 4; bottomMargin = 4 }
+                }
+                val valueText = TextView(this).apply {
+                    text = "%.2f".format(initial)
+                    setTextColor(accent)
+                    textSize = 11f
+                }
+                knob.onValueChanged = { v -> valueText.text = "%.2f".format(v); send(v) }
+                cell.addView(cellLabel)
+                cell.addView(knob)
+                cell.addView(valueText)
+                row.addView(cell)
+                keys.getOrNull(idx)?.let { key -> groupDetailKnobs[key] = knob }
+            }
         }
 
-        sectionHeader("КОМПРЕССОР")
-        addSlider("${ParamKind.COMP_RATIO}:0", "Ratio", data.compRatio) { l -> data.compRatio = l; sendRawAsync(Pro2Commands.setAuxBusCompRatio(index, l)) }
-        addSlider("${ParamKind.COMP_ATTACK}:0", "Attack", data.compAttack) { l -> data.compAttack = l; sendRawAsync(Pro2Commands.setAuxBusCompAttack(index, l)) }
-        addSlider("${ParamKind.COMP_RELEASE}:0", "Release", data.compRelease) { l -> data.compRelease = l; sendRawAsync(Pro2Commands.setAuxBusCompRelease(index, l)) }
-        addSlider("${ParamKind.COMP_THRESHOLD}:0", "Threshold", data.compThreshold) { l -> data.compThreshold = l; sendRawAsync(Pro2Commands.setAuxBusCompThreshold(index, l)) }
-        addSlider("range:0", "Range", data.compRange) { l -> data.compRange = l; sendRawAsync(Pro2Commands.setAuxBusCompRange(index, l)) }
-        addSlider("${ParamKind.COMP_MAKEUP}:0", "Makeup Gain", data.compMakeup) { l -> data.compMakeup = l; sendRawAsync(Pro2Commands.setAuxBusCompMakeup(index, l)) }
-        addSlider("softclip:0", "Soft Clip", data.compSoftClip) { l -> data.compSoftClip = l; sendRawAsync(Pro2Commands.setAuxBusCompSoftClip(index, l)) }
-
-        sectionHeader("ФИЛЬТРЫ")
-        addSlider("hp:0", "HP Freq", data.hpFreq) { l -> data.hpFreq = l; sendRawAsync(Pro2Commands.setAuxBusHpFreq(index, l)) }
-        addSlider("lp:0", "LP Freq", data.lpFreq) { l -> data.lpFreq = l; sendRawAsync(Pro2Commands.setAuxBusLpFreq(index, l)) }
-        addSlider("lownotch:0", "Low Notch", data.lowNotchFreq) { l -> data.lowNotchFreq = l; sendRawAsync(Pro2Commands.setAuxBusLowNotchFreq(index, l)) }
-        addSlider("highnotch:0", "High Notch", data.highNotchFreq) { l -> data.highNotchFreq = l; sendRawAsync(Pro2Commands.setAuxBusHighNotchFreq(index, l)) }
-
-        sectionHeader("EQ - 6 ПОЛОС")
         for (band in 0 until 6) {
-            view.addView(TextView(this).apply {
-                text = "Band ${band + 1}"
-                setTextColor(Color.parseColor("#ff9f0a"))
-                textSize = 11f
-                setPadding(0, 10, 0, 2)
+            container.addView(TextView(this).apply {
+                text = "BAND ${band + 1}"
+                setTextColor(Color.parseColor("#ffffff"))
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                textSize = 12f
+                setPadding(0, if (band == 0) 0 else 12, 0, 4)
             })
-            addSlider("${ParamKind.EQ_FREQ}:$band", "Freq", data.eqFreq[band]) { l -> data.eqFreq[band] = l; sendRawAsync(Pro2Commands.setAuxBusEqFreq(index, band, l)) }
-            addSlider("${ParamKind.EQ_GAIN}:$band", "Gain", data.eqGain[band]) { l -> data.eqGain[band] = l; sendRawAsync(Pro2Commands.setAuxBusEqGain(index, band, l)) }
-            addSlider("${ParamKind.EQ_WIDTH}:$band", "Width", data.eqWidth[band]) { l -> data.eqWidth[band] = l; sendRawAsync(Pro2Commands.setAuxBusEqWidth(index, band, l)) }
+            knobRow(
+                listOf(
+                    Triple("FREQ", data.eqFreq[band], { v: Float -> data.eqFreq[band] = v; sendFreq(band, v) }),
+                    Triple("GAIN", data.eqGain[band], { v: Float -> data.eqGain[band] = v; sendGain(band, v) }),
+                    Triple("WIDTH", data.eqWidth[band], { v: Float -> data.eqWidth[band] = v; sendWidth(band, v) })
+                ),
+                listOf("${ParamKind.EQ_FREQ}:$band", "${ParamKind.EQ_GAIN}:$band", "${ParamKind.EQ_WIDTH}:$band")
+            )
         }
+
+        container.addView(TextView(this).apply {
+            text = "ФИЛЬТРЫ"
+            setTextColor(Color.parseColor("#ffffff"))
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            textSize = 12f
+            setPadding(0, 16, 0, 4)
+        })
+        // HP/LP/notch пока не подписаны на push (см. subscribeAuxBusExtras/
+        // subscribeMainOutExtras) - ключи не указываем, live-update для них не нужен.
+        knobRow(
+            listOf(
+                Triple("HP", data.hpFreq, { v: Float -> data.hpFreq = v; sendHp(v) }),
+                Triple("LP", data.lpFreq, { v: Float -> data.lpFreq = v; sendLp(v) }),
+                Triple("LO NOTCH", data.lowNotchFreq, { v: Float -> data.lowNotchFreq = v; sendLowNotch(v) }),
+                Triple("HI NOTCH", data.highNotchFreq, { v: Float -> data.highNotchFreq = v; sendHighNotch(v) })
+            ),
+            listOf(null, null, null, null)
+        )
+    }
+
+    /** Переключение вкладок COMP/EQ на общем экране деталей aux-шины/Main Out. */
+    private fun showGroupTab(view: android.view.View, tab: String) {
+        val compContent = view.findViewById<android.widget.LinearLayout>(R.id.groupCompBlockContent)
+        val eqContent = view.findViewById<android.widget.LinearLayout>(R.id.groupEqBlockContent)
+        val btnComp = view.findViewById<Button>(R.id.btnGroupTabComp)
+        val btnEq = view.findViewById<Button>(R.id.btnGroupTabEq)
+        compContent.visibility = if (tab == "COMP") android.view.View.VISIBLE else android.view.View.GONE
+        eqContent.visibility = if (tab == "EQ") android.view.View.VISIBLE else android.view.View.GONE
+        btnComp.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (tab == "COMP") "#ff9f0a" else "#1c1c1e"))
+        btnComp.setTextColor(Color.parseColor(if (tab == "COMP") "#000000" else "#ffffff"))
+        btnEq.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (tab == "EQ") "#ff9f0a" else "#1c1c1e"))
+        btnEq.setTextColor(Color.parseColor(if (tab == "EQ") "#000000" else "#ffffff"))
+    }
+
+    private fun openAuxBusDetail(index: Int) {
+        val view = LayoutInflater.from(this).inflate(R.layout.group_detail, channelDetailContainer, false)
+        channelDetailContainer.removeAllViews()
+        channelDetailContainer.addView(view)
+        channelDetailContainer.visibility = android.view.View.VISIBLE
+
+        openGroupDetailKind = "aux"
+        openGroupDetailIndex = index
+        groupDetailKnobs.clear()
+
+        val data = ConnectionHolder.auxBusData[index]
+        view.findViewById<TextView>(R.id.textGroupDetailName).text = data.name.takeIf { it.isNotBlank() } ?: "BUS ${index + 1}"
+        view.findViewById<Button>(R.id.btnGroupDetailBack).setOnClickListener {
+            channelDetailContainer.visibility = android.view.View.GONE
+            channelDetailContainer.removeAllViews()
+            openGroupDetailKind = null
+            openGroupDetailIndex = null
+            groupDetailKnobs.clear()
+        }
+
+        val muteBtn = view.findViewById<Button>(R.id.groupDetailMute)
+        val soloBtn = view.findViewById<ToggleButton>(R.id.groupDetailSolo)
+        val fader = view.findViewById<SeekBar>(R.id.groupDetailFader)
+        val faderContainer = view.findViewById<android.widget.FrameLayout>(R.id.groupDetailFaderContainer)
+        val meterBar = view.findViewById<android.view.View>(R.id.groupDetailMeterBar)
+        setupMeterBarPivot(meterBar)
+        val levelText = view.findViewById<TextView>(R.id.textGroupDetailLevelValue)
+
+        muteBtn.backgroundTintList = null
+        muteBtn.setBackgroundColor(Color.parseColor(if (data.mutedLocal) "#ff3b30" else "#3a3a3c"))
+        soloBtn.backgroundTintList = null
+        fader.max = 1000
+        fader.progress = (data.fader * 1000).toInt()
+        levelText.text = "%.2f".format(data.fader)
+
+        muteBtn.setOnClickListener {
+            val newState = !ConnectionHolder.auxBusData[index].mutedLocal
+            ConnectionHolder.auxBusData[index].mutedLocal = newState
+            muteBtn.setBackgroundColor(Color.parseColor(if (newState) "#ff3b30" else "#3a3a3c"))
+            sendAuxBusMute(index, true)
+        }
+        soloBtn.setOnCheckedChangeListener { _, isChecked ->
+            soloBtn.setBackgroundColor(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
+            sendAuxBusSolo(index, isChecked)
+        }
+        fader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                val level = progress / 1000f
+                levelText.text = "%.2f".format(level)
+                if (!fromUser) return
+                ConnectionHolder.auxBusData[index].fader = level
+                sendAuxBusFader(index, level)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                sendAuxBusFader(index, (sb?.progress ?: 0) / 1000f)
+            }
+        })
+        faderContainer.viewTreeObserver.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                val h = faderContainer.height
+                if (h > 0) {
+                    val p = fader.layoutParams
+                    if (p.width != h) { p.width = h; fader.layoutParams = p }
+                    faderContainer.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                }
+            }
+        })
+
+        val compContent = view.findViewById<android.widget.LinearLayout>(R.id.groupCompBlockContent)
+        val eqContent = view.findViewById<android.widget.LinearLayout>(R.id.groupEqBlockContent)
+        view.findViewById<Button>(R.id.btnGroupTabComp).setOnClickListener { showGroupTab(view, "COMP") }
+        view.findViewById<Button>(R.id.btnGroupTabEq).setOnClickListener { showGroupTab(view, "EQ") }
+
+        buildGroupCompBlock(
+            compContent, data,
+            sendRatio = { v -> sendRawAsync(Pro2Commands.setAuxBusCompRatio(index, v)) },
+            sendAttack = { v -> sendRawAsync(Pro2Commands.setAuxBusCompAttack(index, v)) },
+            sendRelease = { v -> sendRawAsync(Pro2Commands.setAuxBusCompRelease(index, v)) },
+            sendThreshold = { v -> sendRawAsync(Pro2Commands.setAuxBusCompThreshold(index, v)) },
+            sendRange = { v -> sendRawAsync(Pro2Commands.setAuxBusCompRange(index, v)) },
+            sendMakeup = { v -> sendRawAsync(Pro2Commands.setAuxBusCompMakeup(index, v)) },
+            sendSoftClip = { v -> sendRawAsync(Pro2Commands.setAuxBusCompSoftClip(index, v)) }
+        )
+        buildGroupEqBlock(
+            eqContent, data,
+            sendFreq = { band, v -> sendRawAsync(Pro2Commands.setAuxBusEqFreq(index, band, v)) },
+            sendGain = { band, v -> sendRawAsync(Pro2Commands.setAuxBusEqGain(index, band, v)) },
+            sendWidth = { band, v -> sendRawAsync(Pro2Commands.setAuxBusEqWidth(index, band, v)) },
+            sendHp = { v -> sendRawAsync(Pro2Commands.setAuxBusHpFreq(index, v)) },
+            sendLp = { v -> sendRawAsync(Pro2Commands.setAuxBusLpFreq(index, v)) },
+            sendLowNotch = { v -> sendRawAsync(Pro2Commands.setAuxBusLowNotchFreq(index, v)) },
+            sendHighNotch = { v -> sendRawAsync(Pro2Commands.setAuxBusHighNotchFreq(index, v)) }
+        )
+        showGroupTab(view, "COMP")
 
         subscribeAuxBusExtras(index)
+    }
+
+    private fun openMainOutDetail(index: Int) {
+        val view = LayoutInflater.from(this).inflate(R.layout.group_detail, channelDetailContainer, false)
+        channelDetailContainer.removeAllViews()
+        channelDetailContainer.addView(view)
+        channelDetailContainer.visibility = android.view.View.VISIBLE
+
+        openGroupDetailKind = "mainout"
+        openGroupDetailIndex = index
+        groupDetailKnobs.clear()
+
+        val data = ConnectionHolder.mainOutData[index]
+        view.findViewById<TextView>(R.id.textGroupDetailName).text = data.name.takeIf { it.isNotBlank() } ?: "MAIN ${index + 1}"
+        view.findViewById<Button>(R.id.btnGroupDetailBack).setOnClickListener {
+            channelDetailContainer.visibility = android.view.View.GONE
+            channelDetailContainer.removeAllViews()
+            openGroupDetailKind = null
+            openGroupDetailIndex = null
+            groupDetailKnobs.clear()
+        }
+
+        val muteBtn = view.findViewById<Button>(R.id.groupDetailMute)
+        val soloBtn = view.findViewById<ToggleButton>(R.id.groupDetailSolo)
+        val fader = view.findViewById<SeekBar>(R.id.groupDetailFader)
+        val faderContainer = view.findViewById<android.widget.FrameLayout>(R.id.groupDetailFaderContainer)
+        val meterBar = view.findViewById<android.view.View>(R.id.groupDetailMeterBar)
+        setupMeterBarPivot(meterBar)
+        val levelText = view.findViewById<TextView>(R.id.textGroupDetailLevelValue)
+
+        muteBtn.backgroundTintList = null
+        muteBtn.setBackgroundColor(Color.parseColor(if (data.mutedLocal) "#ff3b30" else "#3a3a3c"))
+        soloBtn.backgroundTintList = null
+        fader.max = 1000
+        fader.progress = (data.fader * 1000).toInt()
+        levelText.text = "%.2f".format(data.fader)
+
+        muteBtn.setOnClickListener {
+            val newState = !ConnectionHolder.mainOutData[index].mutedLocal
+            ConnectionHolder.mainOutData[index].mutedLocal = newState
+            muteBtn.setBackgroundColor(Color.parseColor(if (newState) "#ff3b30" else "#3a3a3c"))
+            sendRawAsync(Pro2Commands.setMainOutMute(index, true))
+        }
+        soloBtn.setOnCheckedChangeListener { _, isChecked ->
+            soloBtn.setBackgroundColor(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
+            sendRawAsync(Pro2Commands.setMainOutSolo(index, isChecked))
+        }
+        fader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                val level = progress / 1000f
+                levelText.text = "%.2f".format(level)
+                if (!fromUser) return
+                ConnectionHolder.mainOutData[index].fader = level
+                sendRawAsync(Pro2Commands.setMainOutFader(index, level))
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {
+                sendRawAsync(Pro2Commands.setMainOutFader(index, (sb?.progress ?: 0) / 1000f))
+            }
+        })
+        faderContainer.viewTreeObserver.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                val h = faderContainer.height
+                if (h > 0) {
+                    val p = fader.layoutParams
+                    if (p.width != h) { p.width = h; fader.layoutParams = p }
+                    faderContainer.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                }
+            }
+        })
+
+        val compContent = view.findViewById<android.widget.LinearLayout>(R.id.groupCompBlockContent)
+        val eqContent = view.findViewById<android.widget.LinearLayout>(R.id.groupEqBlockContent)
+        view.findViewById<Button>(R.id.btnGroupTabComp).setOnClickListener { showGroupTab(view, "COMP") }
+        view.findViewById<Button>(R.id.btnGroupTabEq).setOnClickListener { showGroupTab(view, "EQ") }
+
+        buildGroupCompBlock(
+            compContent, data,
+            sendRatio = { v -> sendRawAsync(Pro2Commands.setMainOutCompRatio(index, v)) },
+            sendAttack = { v -> sendRawAsync(Pro2Commands.setMainOutCompAttack(index, v)) },
+            sendRelease = { v -> sendRawAsync(Pro2Commands.setMainOutCompRelease(index, v)) },
+            sendThreshold = { v -> sendRawAsync(Pro2Commands.setMainOutCompThreshold(index, v)) },
+            sendRange = { v -> sendRawAsync(Pro2Commands.setMainOutCompRange(index, v)) },
+            sendMakeup = { v -> sendRawAsync(Pro2Commands.setMainOutCompMakeup(index, v)) },
+            sendSoftClip = { v -> sendRawAsync(Pro2Commands.setMainOutCompSoftClip(index, v)) }
+        )
+        buildGroupEqBlock(
+            eqContent, data,
+            sendFreq = { band, v -> sendRawAsync(Pro2Commands.setMainOutEqFreq(index, band, v)) },
+            sendGain = { band, v -> sendRawAsync(Pro2Commands.setMainOutEqGain(index, band, v)) },
+            sendWidth = { band, v -> sendRawAsync(Pro2Commands.setMainOutEqWidth(index, band, v)) },
+            sendHp = { v -> sendRawAsync(Pro2Commands.setMainOutHpFreq(index, v)) },
+            sendLp = { v -> sendRawAsync(Pro2Commands.setMainOutLpFreq(index, v)) },
+            sendLowNotch = { v -> sendRawAsync(Pro2Commands.setMainOutLowNotchFreq(index, v)) },
+            sendHighNotch = { v -> sendRawAsync(Pro2Commands.setMainOutHighNotchFreq(index, v)) }
+        )
+        showGroupTab(view, "COMP")
+
+        subscribeMainOutExtras(index)
     }
 
     private fun openChannelDetail(channel: Int) {

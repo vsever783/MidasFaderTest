@@ -97,6 +97,28 @@ data class AuxReturnData(
 )
 
 /** Состояние одной aux-шины (собственный уровень шины, не посыл с канала). */
+/**
+ * Общая "форма" EQ (6 полос) + компрессора + фильтров - реализуют и
+ * AuxBusData, и MainOutData, чтобы экран деталей строился ОДНОЙ общей
+ * функцией (buildGroupCompBlock/buildGroupEqBlock), а не дублировался.
+ */
+interface EqCompHolder {
+    var compRatio: Float
+    var compAttack: Float
+    var compRelease: Float
+    var compThreshold: Float
+    var compRange: Float
+    var compMakeup: Float
+    var compSoftClip: Float
+    val eqFreq: FloatArray
+    val eqGain: FloatArray
+    val eqWidth: FloatArray
+    var hpFreq: Float
+    var lpFreq: Float
+    var lowNotchFreq: Float
+    var highNotchFreq: Float
+}
+
 data class AuxBusData(
     var fader: Float = 0f,
     var mutedLocal: Boolean = false,
@@ -107,21 +129,21 @@ data class AuxBusData(
     // Outs (см. заметку у MainOutData) - по датасету muffeeee у aux-шин
     // ("enVirtualSubMixes") есть тот же набор. НЕ подтверждено реальным
     // захватом.
-    val eqFreq: FloatArray = FloatArray(6),
-    val eqGain: FloatArray = FloatArray(6),
-    val eqWidth: FloatArray = FloatArray(6),
-    var hpFreq: Float = 0f,
-    var lpFreq: Float = 0f,
-    var lowNotchFreq: Float = 0f,
-    var highNotchFreq: Float = 0f,
-    var compRatio: Float = 0f,
-    var compAttack: Float = 0f,
-    var compRelease: Float = 0f,
-    var compThreshold: Float = 0f,
-    var compRange: Float = 0f,
-    var compMakeup: Float = 0f,
-    var compSoftClip: Float = 0f
-)
+    override val eqFreq: FloatArray = FloatArray(6),
+    override val eqGain: FloatArray = FloatArray(6),
+    override val eqWidth: FloatArray = FloatArray(6),
+    override var hpFreq: Float = 0f,
+    override var lpFreq: Float = 0f,
+    override var lowNotchFreq: Float = 0f,
+    override var highNotchFreq: Float = 0f,
+    override var compRatio: Float = 0f,
+    override var compAttack: Float = 0f,
+    override var compRelease: Float = 0f,
+    override var compThreshold: Float = 0f,
+    override var compRange: Float = 0f,
+    override var compMakeup: Float = 0f,
+    override var compSoftClip: Float = 0f
+) : EqCompHolder
 
 data class VcaData(
     var fader: Float = 0f,
@@ -154,21 +176,21 @@ data class MainOutData(
     // muffeeee/midas-pro-series-osc-commands (enVirtualMainOuts), где эти
     // параметры описаны текстом ("Set matrix out EQ frequency for band N"
     // и т.п.), но не проверялись живьём.
-    val eqFreq: FloatArray = FloatArray(6),
-    val eqGain: FloatArray = FloatArray(6),
-    val eqWidth: FloatArray = FloatArray(6),
-    var hpFreq: Float = 0f,
-    var lpFreq: Float = 0f,
-    var lowNotchFreq: Float = 0f,
-    var highNotchFreq: Float = 0f,
+    override val eqFreq: FloatArray = FloatArray(6),
+    override val eqGain: FloatArray = FloatArray(6),
+    override val eqWidth: FloatArray = FloatArray(6),
+    override var hpFreq: Float = 0f,
+    override var lpFreq: Float = 0f,
+    override var lowNotchFreq: Float = 0f,
+    override var highNotchFreq: Float = 0f,
     // Компрессор - тот же набор, что и у канала, плюс range и soft clip.
-    var compRatio: Float = 0f,
-    var compAttack: Float = 0f,
-    var compRelease: Float = 0f,
-    var compThreshold: Float = 0f,
-    var compRange: Float = 0f,
-    var compMakeup: Float = 0f,
-    var compSoftClip: Float = 0f,
+    override var compRatio: Float = 0f,
+    override var compAttack: Float = 0f,
+    override var compRelease: Float = 0f,
+    override var compThreshold: Float = 0f,
+    override var compRange: Float = 0f,
+    override var compMakeup: Float = 0f,
+    override var compSoftClip: Float = 0f,
     var outputDelay: Float = 0f
-)
+) : EqCompHolder
 

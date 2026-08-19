@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Общий детальный экран для aux-шины и Main Out - урезанная копия
+    channel_detail.xml (та же визуальная стилистика: верхняя панель,
+    полоса вкладок, правая колонка mute/solo/фейдер/метр), но только с
+    вкладками COMP и EQ - у этих групп нет входного каскада (gain/48V/
+    phase) и gate, поэтому вкладки INPUT/GATE/SENDS не нужны.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical"
+    android:background="#000000">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#1c1c1e"
+        android:padding="12dp">
+
+        <Button
+            android:id="@+id/btnGroupDetailBack"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="← Back"
+            android:textColor="#ffffff"
+            android:backgroundTint="#3a3a3c" />
+
+        <TextView
+            android:id="@+id/textGroupDetailName"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="16dp"
+            android:text="BUS 1"
+            android:textColor="#ffffff"
+            android:textStyle="bold"
+            android:textSize="20sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#1c1c1e">
+
+        <Button
+            android:id="@+id/btnGroupTabComp"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:minWidth="0dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
+            android:text="COMP"
+            android:textColor="#000000"
+            android:textStyle="bold"
+            android:background="@android:color/transparent"
+            android:backgroundTint="#ff9f0a" />
+
+        <View
+            android:layout_width="1dp"
+            android:layout_height="match_parent"
+            android:background="#3a3a3c" />
+
+        <Button
+            android:id="@+id/btnGroupTabEq"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:minWidth="0dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
+            android:text="EQ"
+            android:textColor="#ffffff"
+            android:textStyle="bold"
+            android:background="@android:color/transparent"
+            android:backgroundTint="#1c1c1e" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
+
+        <ScrollView
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:id="@+id/groupCompBlockContent"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp"
+                    android:visibility="gone" />
+
+                <LinearLayout
+                    android:id="@+id/groupEqBlockContent"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp"
+                    android:visibility="gone" />
+
+            </LinearLayout>
+        </ScrollView>
+
+        <LinearLayout
+            android:layout_width="80dp"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:background="#151517"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp">
+
+            <ToggleButton
+                android:id="@+id/groupDetailSolo"
+                android:layout_width="match_parent"
+                android:layout_height="30dp"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
+                android:textOn="SOLO"
+                android:textOff="SOLO"
+                android:textSize="10sp"
+                android:textColor="#ffffff" />
+
+            <Button
+                android:id="@+id/groupDetailMute"
+                android:layout_width="match_parent"
+                android:layout_height="30dp"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
+                android:layout_marginTop="6dp"
+                android:text="MUTE"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:textColor="#ffffff" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal"
+                android:gravity="center_horizontal">
+
+                <FrameLayout
+                    android:layout_width="6dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginEnd="3dp">
+                    <View
+                        android:id="@+id/groupDetailMeterBar"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:layout_gravity="bottom"
+                        android:background="#34c759"
+                        android:scaleY="0" />
+                </FrameLayout>
+
+                <FrameLayout
+                    android:id="@+id/groupDetailFaderContainer"
+                    android:layout_width="28dp"
+                    android:layout_height="match_parent">
+
+                    <SeekBar
+                        android:id="@+id/groupDetailFader"
+                        android:layout_width="220dp"
+                        android:layout_height="28dp"
+                        android:layout_gravity="center"
+                        android:max="1000"
+                        android:progress="0"
+                        android:progressTint="#ff9f0a"
+                        android:thumbTint="#ffffff"
+                        android:rotation="270" />
+                </FrameLayout>
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/textGroupDetailLevelValue"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0,00"
+                android:textColor="#ff9f0a"
+                android:textStyle="bold"
+                android:textSize="12sp"
+                android:layout_marginTop="8dp" />
+
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
