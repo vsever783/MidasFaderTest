@@ -74,10 +74,15 @@ class RotaryKnobView @JvmOverloads constructor(
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                // 150px of vertical drag = full 0..1 sweep; feels reasonable
-                // at typical phone density without being too twitchy.
+                // ВАЖНО (безопасность на живом мероприятии): было 150px на
+                // весь диапазон 0..1 - слишком чувствительно, случайное
+                // короткое движение пальцем могло дёрнуть параметр (gain,
+                // частоту EQ и т.п.) сразу в другой конец шкалы. Теперь
+                // нужно ~750px - примерно весь экран телефона по вертикали,
+                // то есть даже сознательный длинный жест даёт плавное,
+                // предсказуемое изменение, а не рывок.
                 val deltaY = dragStartY - event.y
-                val deltaValue = deltaY / 150f
+                val deltaValue = deltaY / 750f
                 value = dragStartValue + deltaValue
                 onValueChanged?.invoke(value)
                 return true

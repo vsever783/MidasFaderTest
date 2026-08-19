@@ -636,6 +636,56 @@ object Pro2Commands {
     fun getMainOutCompRatio(index: Int): ByteArray = OscUtil.encode(mainOutCompRatioAddress(), listOf(index))
     fun getMainOutCompThreshold(index: Int): ByteArray = OscUtil.encode(mainOutCompThresholdAddress(), listOf(index))
 
+    // === Aux-шины - EQ (6 полос) и компрессор. Та же структура, что у Main
+    // Outs, но с ДРУГИМИ именами параметров - сверено с датасетом отдельно,
+    // не предполагалось по аналогии. Главное отличие: gain для EQ называется
+    // enPEQQGainBand (двойное Q - так в самой прошивке, не опечатка).
+    // НЕ подтверждено реальным захватом. ===
+    fun auxBusEqFreqAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQFrequencyBand${band + 1}"
+    fun auxBusEqGainAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQQGainBand${band + 1}"
+    fun auxBusEqWidthAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQWidthBand${band + 1}"
+    fun auxBusHpFreqAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enGEQHPFrequency"
+    fun auxBusLpFreqAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enGEQLPFrequency"
+    fun auxBusLowNotchFreqAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enGEQLowNotchFrequency"
+    fun auxBusHighNotchFreqAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enGEQHighNotchFrequency"
+
+    fun auxBusCompRatioAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enComLimRatio"
+    fun auxBusCompAttackAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enCompLimAttackTime"
+    fun auxBusCompReleaseAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enCompLimReleaseTime"
+    fun auxBusCompThresholdAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enCompLimThreshold"
+    fun auxBusCompRangeAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enCompLimRange"
+    fun auxBusCompMakeupAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enDynamicsOverallMakeUpGain"
+    fun auxBusCompSoftClipAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enCompLimSoftClip"
+
+    fun setAuxBusEqFreq(index: Int, band: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusEqFreqAddress(band), listOf(index, level.coerceIn(0f, 1f)))
+    fun setAuxBusEqGain(index: Int, band: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusEqGainAddress(band), listOf(index, level.coerceIn(0f, 1f)))
+    fun setAuxBusEqWidth(index: Int, band: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusEqWidthAddress(band), listOf(index, level.coerceIn(0f, 1f)))
+    fun setAuxBusHpFreq(index: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusHpFreqAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setAuxBusLpFreq(index: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusLpFreqAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setAuxBusLowNotchFreq(index: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusLowNotchFreqAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setAuxBusHighNotchFreq(index: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusHighNotchFreqAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setAuxBusCompRatio(index: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusCompRatioAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setAuxBusCompAttack(index: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusCompAttackAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setAuxBusCompRelease(index: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusCompReleaseAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setAuxBusCompThreshold(index: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusCompThresholdAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setAuxBusCompRange(index: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusCompRangeAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setAuxBusCompMakeup(index: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusCompMakeupAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setAuxBusCompSoftClip(index: Int, level: Float): ByteArray =
+        OscUtil.encode(auxBusCompSoftClipAddress(), listOf(index, level.coerceIn(0f, 1f)))
+
     // === Посыл канала на aux-шину (НЕ подтверждено реальным захватом) ===
     // В самом пульте это называется "SubSend", не "AuxSend" - у каждой из 16
     // шин свой отдельный параметр (индекс шины зашит в имя, а не передаётся

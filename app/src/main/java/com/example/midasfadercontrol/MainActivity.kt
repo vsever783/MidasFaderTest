@@ -86,6 +86,7 @@ class MainActivity : AppCompatActivity() {
     internal val inputExtrasSubscribed get() = ConnectionHolder.inputExtrasSubscribed
     internal val compGateExtrasSubscribed get() = ConnectionHolder.compGateExtrasSubscribed
     internal val mainOutExtrasSubscribed get() = ConnectionHolder.mainOutExtrasSubscribed
+    internal val auxBusExtrasSubscribed get() = ConnectionHolder.auxBusExtrasSubscribed
 
     internal data class ChannelUi(
         val rootView: android.view.View,
@@ -135,6 +136,15 @@ class MainActivity : AppCompatActivity() {
         // Убираем системную белую панель заголовка - она отнимает заметную
         // полосу по высоте, особенно чувствительно в альбомной ориентации.
         supportActionBar?.hide()
+
+        // Системные рамки (статус-бар сверху, навигация снизу) - чёрные,
+        // чтобы не выбивались белой полосой на фоне тёмного интерфейса.
+        window.statusBarColor = Color.BLACK
+        window.navigationBarColor = Color.BLACK
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = window.decorView.systemUiVisibility and
+            android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv() and
+            android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
 
         if (appMode == MODE_MONITOR) {
             onCreateMonitor()
@@ -210,6 +220,8 @@ class MainActivity : AppCompatActivity() {
     // ползунков при входящих push, пока экран виден.
     private var openMainOutDetailIndex: Int? = null
     private val mainOutDetailControls = mutableMapOf<String, SeekBar>()
+    private var openAuxBusDetailIndex: Int? = null
+    private val auxBusDetailControls = mutableMapOf<String, SeekBar>()
     private var monitorChannelLabels: Array<TextView?> = arrayOfNulls(56)
     private val monitorBankButtons = mutableListOf<Button>()
     private var monitorBankStart = 0
@@ -853,6 +865,7 @@ class MainActivity : AppCompatActivity() {
                 onSolo = { soloed -> sendAuxBusSolo(b, soloed) },
                 onSoloB = { soloed -> ConnectionHolder.auxBusData[b].soloBLocal = soloed; sendRawAsync(Pro2Commands.setAuxBusSoloB(b, soloed)) }
             )
+            ui.headerView.setOnClickListener { openAuxBusDetail(b) }
             auxBusStrips.add(ui)
         }
     }
@@ -1557,11 +1570,29 @@ class MainActivity : AppCompatActivity() {
                     auxBusStrips.getOrNull(sub.channel)?.headerView?.setBackgroundColor(argb)
                 }
             }
+            ParamKind.EQ_FREQ, ParamKind.EQ_GAIN, ParamKind.EQ_WIDTH, ParamKind.COMP_RATIO,
+            ParamKind.COMP_ATTACK, ParamKind.COMP_RELEASE, ParamKind.COMP_THRESHOLD, ParamKind.COMP_MAKEUP -> {
+                if (blob.size < 4) return
+                val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).float.coerceIn(0f, 1f)
+                val data = ConnectionHolder.auxBusData.getOrNull(sub.channel) ?: return
+                when (sub.kind) {
+                    ParamKind.EQ_FREQ -> data.eqFreq.getOrNull(sub.eqBand)?.let { data.eqFreq[sub.eqBand] = level }
+                    ParamKind.EQ_GAIN -> data.eqGain.getOrNull(sub.eqBand)?.let { data.eqGain[sub.eqBand] = level }
+                    ParamKind.EQ_WIDTH -> data.eqWidth.getOrNull(sub.eqBand)?.let { data.eqWidth[sub.eqBand] = level }
+                    ParamKind.COMP_RATIO -> data.compRatio = level
+                    ParamKind.COMP_ATTACK -> data.compAttack = level
+                    ParamKind.COMP_RELEASE -> data.compRelease = level
+                    ParamKind.COMP_THRESHOLD -> data.compThreshold = level
+                    ParamKind.COMP_MAKEUP -> data.compMakeup = level
+                    else -> {}
+                }
+                if (openAuxBusDetailIndex == sub.channel) {
+                    auxBusDetailControls["${sub.kind}:${sub.eqBand}"]?.let { seek -> seek.progress = (level * 1000).toInt() }
+                }
+            }
             else -> {}
         }
     }
-
-    /** Разбор push-обновления для VCA-групп - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным захватом трафика iPad. */
     internal fun handleVcaSubscribedValue(sub: Subscription, blob: ByteArray) {
         when (sub.kind) {
             ParamKind.FADER -> {
@@ -2185,7 +2216,7 @@ class MainActivity : AppCompatActivity() {
      * Детальный экран Main Out: 6-полосный EQ + компрессор + HP/LP/notch
      * фильтры. НЕ подтверждено реальным захватом - адреса из датасета
      * muffeeee/midas-pro-series-osc-commands (см. заметки в Pro2Commands.kt
-     * у mainOutEq*/mainOutComp* функций). Значения показаны как есть
+     * у функций mainOutEq... и mainOutComp...). Значения показаны как есть
      * (0.00-1.00), без пересчёта в дБ/Гц - калибровочных пар для Main Out
      * ещё нет (в отличие от канального компрессора).
      */
@@ -2313,6 +2344,137 @@ class MainActivity : AppCompatActivity() {
         }
 
         subscribeMainOutExtras(index)
+    }
+
+    /**
+     * Детальный экран aux-шины: 6-полосный EQ + компрессор + HP/LP/notch
+     * фильтры - структурно идентичен openMainOutDetail (та же вёрстка, тот
+     * же helper addSlider), отличаются только адреса и источник данных.
+     * НЕ подтверждено реальным захватом.
+     */
+    private fun openAuxBusDetail(index: Int) {
+        val view = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#000000"))
+            setPadding(16, 16, 16, 40)
+        }
+        val scroll = android.widget.ScrollView(this).apply { addView(view) }
+        channelDetailContainer.removeAllViews()
+        channelDetailContainer.addView(scroll)
+        channelDetailContainer.visibility = android.view.View.VISIBLE
+
+        openAuxBusDetailIndex = index
+        auxBusDetailControls.clear()
+
+        val topBar = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+        }
+        val backBtn = Button(this).apply {
+            text = "⟵"
+            setOnClickListener {
+                channelDetailContainer.visibility = android.view.View.GONE
+                channelDetailContainer.removeAllViews()
+                openAuxBusDetailIndex = null
+                auxBusDetailControls.clear()
+            }
+        }
+        val title = TextView(this).apply {
+            text = "BUS ${index + 1} DETAIL"
+            setTextColor(Color.parseColor("#ff9f0a"))
+            textSize = 18f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(16, 0, 0, 0)
+        }
+        topBar.addView(backBtn)
+        topBar.addView(title)
+        view.addView(topBar)
+
+        val data = ConnectionHolder.auxBusData[index]
+
+        fun sectionHeader(text: String) {
+            view.addView(TextView(this).apply {
+                this.text = text
+                setTextColor(Color.parseColor("#8e8e93"))
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                textSize = 12f
+                setPadding(0, 24, 0, 6)
+            })
+        }
+
+        fun addSlider(key: String, label: String, initial: Float, onChange: (Float) -> Unit) {
+            val row = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            val labelView = TextView(this).apply {
+                text = label
+                setTextColor(Color.parseColor("#ffffff"))
+                textSize = 12f
+                layoutParams = android.widget.LinearLayout.LayoutParams(160, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
+            }
+            val valueView = TextView(this).apply {
+                text = "%.2f".format(initial)
+                setTextColor(Color.parseColor("#ff9f0a"))
+                textSize = 11f
+                layoutParams = android.widget.LinearLayout.LayoutParams(60, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
+            }
+            val seek = SeekBar(this).apply {
+                max = 1000
+                progress = (initial * 1000).toInt()
+                progressTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#ff9f0a"))
+                thumbTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                        if (!fromUser) return
+                        val level = progress / 1000f
+                        valueView.text = "%.2f".format(level)
+                        onChange(level)
+                    }
+                    override fun onStartTrackingTouch(sb: SeekBar?) {}
+                    override fun onStopTrackingTouch(sb: SeekBar?) {}
+                })
+            }
+            auxBusDetailControls[key] = seek
+            row.addView(labelView)
+            row.addView(seek)
+            row.addView(valueView)
+            view.addView(row, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 4 })
+        }
+
+        sectionHeader("КОМПРЕССОР")
+        addSlider("${ParamKind.COMP_RATIO}:0", "Ratio", data.compRatio) { l -> data.compRatio = l; sendRawAsync(Pro2Commands.setAuxBusCompRatio(index, l)) }
+        addSlider("${ParamKind.COMP_ATTACK}:0", "Attack", data.compAttack) { l -> data.compAttack = l; sendRawAsync(Pro2Commands.setAuxBusCompAttack(index, l)) }
+        addSlider("${ParamKind.COMP_RELEASE}:0", "Release", data.compRelease) { l -> data.compRelease = l; sendRawAsync(Pro2Commands.setAuxBusCompRelease(index, l)) }
+        addSlider("${ParamKind.COMP_THRESHOLD}:0", "Threshold", data.compThreshold) { l -> data.compThreshold = l; sendRawAsync(Pro2Commands.setAuxBusCompThreshold(index, l)) }
+        addSlider("range:0", "Range", data.compRange) { l -> data.compRange = l; sendRawAsync(Pro2Commands.setAuxBusCompRange(index, l)) }
+        addSlider("${ParamKind.COMP_MAKEUP}:0", "Makeup Gain", data.compMakeup) { l -> data.compMakeup = l; sendRawAsync(Pro2Commands.setAuxBusCompMakeup(index, l)) }
+        addSlider("softclip:0", "Soft Clip", data.compSoftClip) { l -> data.compSoftClip = l; sendRawAsync(Pro2Commands.setAuxBusCompSoftClip(index, l)) }
+
+        sectionHeader("ФИЛЬТРЫ")
+        addSlider("hp:0", "HP Freq", data.hpFreq) { l -> data.hpFreq = l; sendRawAsync(Pro2Commands.setAuxBusHpFreq(index, l)) }
+        addSlider("lp:0", "LP Freq", data.lpFreq) { l -> data.lpFreq = l; sendRawAsync(Pro2Commands.setAuxBusLpFreq(index, l)) }
+        addSlider("lownotch:0", "Low Notch", data.lowNotchFreq) { l -> data.lowNotchFreq = l; sendRawAsync(Pro2Commands.setAuxBusLowNotchFreq(index, l)) }
+        addSlider("highnotch:0", "High Notch", data.highNotchFreq) { l -> data.highNotchFreq = l; sendRawAsync(Pro2Commands.setAuxBusHighNotchFreq(index, l)) }
+
+        sectionHeader("EQ - 6 ПОЛОС")
+        for (band in 0 until 6) {
+            view.addView(TextView(this).apply {
+                text = "Band ${band + 1}"
+                setTextColor(Color.parseColor("#ff9f0a"))
+                textSize = 11f
+                setPadding(0, 10, 0, 2)
+            })
+            addSlider("${ParamKind.EQ_FREQ}:$band", "Freq", data.eqFreq[band]) { l -> data.eqFreq[band] = l; sendRawAsync(Pro2Commands.setAuxBusEqFreq(index, band, l)) }
+            addSlider("${ParamKind.EQ_GAIN}:$band", "Gain", data.eqGain[band]) { l -> data.eqGain[band] = l; sendRawAsync(Pro2Commands.setAuxBusEqGain(index, band, l)) }
+            addSlider("${ParamKind.EQ_WIDTH}:$band", "Width", data.eqWidth[band]) { l -> data.eqWidth[band] = l; sendRawAsync(Pro2Commands.setAuxBusEqWidth(index, band, l)) }
+        }
+
+        subscribeAuxBusExtras(index)
     }
 
     private fun openChannelDetail(channel: Int) {

@@ -605,6 +605,60 @@ import java.net.SocketTimeoutException
         }
     }
 
+    internal fun MainActivity.subscribeAuxBusExtras(index: Int) {
+        val sock = socket ?: return
+        val address = consoleAddress ?: return
+        val port = consolePort
+        val token = sessionToken ?: return
+        if (auxBusExtrasSubscribed.contains(index)) return
+        auxBusExtrasSubscribed.add(index)
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val sid = sessionId
+            val subs = mutableListOf<Pair<String, Subscription>>()
+            val paths = mutableMapOf<String, String>()
+            for (band in 0 until 6) {
+                val fh = "/h_${sid}_ab${index}_eqfreq$band"
+                val gh = "/h_${sid}_ab${index}_eqgain$band"
+                val wh = "/h_${sid}_ab${index}_eqwidth$band"
+                subs.add(fh to Subscription(index, ParamKind.EQ_FREQ, eqBand = band))
+                subs.add(gh to Subscription(index, ParamKind.EQ_GAIN, eqBand = band))
+                subs.add(wh to Subscription(index, ParamKind.EQ_WIDTH, eqBand = band))
+                paths[fh] = Pro2Commands.auxBusEqFreqAddress(band)
+                paths[gh] = Pro2Commands.auxBusEqGainAddress(band)
+                paths[wh] = Pro2Commands.auxBusEqWidthAddress(band)
+            }
+            val ratioH = "/h_${sid}_ab${index}_compratio"
+            val attackH = "/h_${sid}_ab${index}_compattack"
+            val releaseH = "/h_${sid}_ab${index}_comprelease"
+            val threshH = "/h_${sid}_ab${index}_compthreshold"
+            val makeupH = "/h_${sid}_ab${index}_compmakeup"
+            subs.add(ratioH to Subscription(index, ParamKind.COMP_RATIO))
+            subs.add(attackH to Subscription(index, ParamKind.COMP_ATTACK))
+            subs.add(releaseH to Subscription(index, ParamKind.COMP_RELEASE))
+            subs.add(threshH to Subscription(index, ParamKind.COMP_THRESHOLD))
+            subs.add(makeupH to Subscription(index, ParamKind.COMP_MAKEUP))
+            paths[ratioH] = Pro2Commands.auxBusCompRatioAddress()
+            paths[attackH] = Pro2Commands.auxBusCompAttackAddress()
+            paths[releaseH] = Pro2Commands.auxBusCompReleaseAddress()
+            paths[threshH] = Pro2Commands.auxBusCompThresholdAddress()
+            paths[makeupH] = Pro2Commands.auxBusCompMakeupAddress()
+
+            withContext(Dispatchers.Main) {
+                for ((handle, sub) in subs) auxBusSubscriptions[handle] = sub
+            }
+            for ((handle, sub) in subs) {
+                val path = paths[handle] ?: continue
+                try {
+                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, index, index, token))
+                } catch (e: Exception) {
+                    // не критично
+                }
+                delay(2)
+            }
+        }
+    }
+
     internal fun MainActivity.subscribeMainOutExtras(index: Int) {
         val sock = socket ?: return
         val address = consoleAddress ?: return

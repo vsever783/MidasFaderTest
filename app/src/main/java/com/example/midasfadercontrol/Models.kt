@@ -102,7 +102,25 @@ data class AuxBusData(
     var mutedLocal: Boolean = false,
     var name: String = "",
     var colourArgb: Int? = null,
-    var soloBLocal: Boolean = false
+    var soloBLocal: Boolean = false,
+    // EQ (6 полос) + компрессор + фильтры - та же структура, что и у Main
+    // Outs (см. заметку у MainOutData) - по датасету muffeeee у aux-шин
+    // ("enVirtualSubMixes") есть тот же набор. НЕ подтверждено реальным
+    // захватом.
+    val eqFreq: FloatArray = FloatArray(6),
+    val eqGain: FloatArray = FloatArray(6),
+    val eqWidth: FloatArray = FloatArray(6),
+    var hpFreq: Float = 0f,
+    var lpFreq: Float = 0f,
+    var lowNotchFreq: Float = 0f,
+    var highNotchFreq: Float = 0f,
+    var compRatio: Float = 0f,
+    var compAttack: Float = 0f,
+    var compRelease: Float = 0f,
+    var compThreshold: Float = 0f,
+    var compRange: Float = 0f,
+    var compMakeup: Float = 0f,
+    var compSoftClip: Float = 0f
 )
 
 data class VcaData(
