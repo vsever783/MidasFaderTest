@@ -1630,6 +1630,12 @@ class MainActivity : AppCompatActivity() {
             btn.setTextColor(Color.parseColor(if (member) "#000000" else "#ffffff"))
         }
     }
+
+    /**
+     * Main Outs (8 позиций) - базовая полоса. См. заметку в
+     * Pro2Commands.kt у mainOut*Address() про степень подтверждённости.
+     */
+    internal fun handleMainOutSubscribedValue(sub: Subscription, blob: ByteArray) {
         when (sub.kind) {
             ParamKind.FADER -> {
                 if (blob.size < 4) return
