@@ -62,9 +62,15 @@ object Pro2Commands {
     // Вторая шина solo - ПОДТВЕРЖДЕНО реальным трафиком (есть даже у
     // обычных каналов, не только у мастера/aux/шин).
     fun soloBAddress() = "/enPPCSwitchMessage/$GROUP/enFaderSoloB"
-    // Стерео-пара (link) - НЕ подтверждено реальным захватом (из большого
-    // датасета midas-pro-mcp-server, brute-force реверс-инжиниринг).
-    fun linkAddress() = "/enPPCSwitchMessage/$GROUP/enRoutingLinked"
+    // Стерео-пара (link) - было enRoutingLinked, проверено на реальном
+    // пульте, не работало (тупик, обсуждалось отдельно). По датасету
+    // muffeeee/midas-pro-series-osc-commands enRoutingLinked - это лишь ОДИН
+    // из полутора десятков флагов настройки УЖЕ слинкованной пары (что
+    // именно линковать - fader/mute/EQ/routing и т.д.), а не сам переключатель
+    // "сделать пару". Пробуем enChannelLinked - по структуре похож на
+    // главный тумблер, но сам пока не задокументирован сообществом
+    // ("unknown") - нужна проверка на реальном пульте.
+    fun linkAddress() = "/enPPCSwitchMessage/$GROUP/enChannelLinked"
     // ПОДТВЕРЖДЕНО реальным трафиком Mixtender 2 (перехват "TRIM" ручки на канале 32):
     // адрес enInputGain НЕ используется приложением для этой ручки вообще -
     // реально используется enMicSplitStepGain. Обозначение в JSON-файле muffeeee
@@ -142,8 +148,18 @@ object Pro2Commands {
     // смена наблюдалась только когда её делали прямо на экране пульта,
     // поэтому только для чтения (read-only).
     fun compDetectorModeAddress() = "/enPPCIntegerMessage/$GROUP/enCompDetectorMode"
+    // Цикл режима ("нажал - переключилось на следующий") - ОТДЕЛЬНЫЙ адрес
+    // от чтения выше (тот подтверждён захватом как enPPCIntegerMessage,
+    // этот - по датасету muffeeee, где enCompDetectorMode описан как
+    // enPPCSwitchMessage с описанием "Cycles to next compressor mode" -
+    // та же логика, что и compInAddress: сам факт пакета переключает).
+    // НЕ подтверждено реальным захватом - нужна проверка на пульте.
+    fun compDetectorModeCycleAddress() = "/enPPCSwitchMessage/$GROUP/enCompDetectorMode"
     // Режим gate (например "Gate" по умолчанию) - тот же случай, только чтение.
     fun gateModeAddress() = "/enPPCIntegerMessage/$GROUP/enGateMode"
+    // Аналогично compDetectorModeCycleAddress - отдельный toggle-адрес для
+    // переключения на следующий режим. НЕ подтверждено реальным захватом.
+    fun gateModeCycleAddress() = "/enPPCSwitchMessage/$GROUP/enGateMode"
 
     fun setFader(channelIndex: Int, level: Float): ByteArray =
         OscUtil.encode(faderAddress(), listOf(channelIndex, level.coerceIn(0f, 1f)))
@@ -246,6 +262,14 @@ object Pro2Commands {
     /** compIn - как и mute, это TOGGLE: значение в аргументе не важно, важен сам факт пакета. */
     fun setCompIn(channelIndex: Int): ByteArray =
         OscUtil.encode(compInAddress(), listOf(channelIndex, 1))
+
+    /** Переключает режим компрессора на следующий по списку - см. заметку у compDetectorModeCycleAddress. */
+    fun setCompDetectorModeNext(channelIndex: Int): ByteArray =
+        OscUtil.encode(compDetectorModeCycleAddress(), listOf(channelIndex, 1))
+
+    /** Переключает режим gate/expander на следующий по списку - см. заметку у gateModeCycleAddress. */
+    fun setGateModeNext(channelIndex: Int): ByteArray =
+        OscUtil.encode(gateModeCycleAddress(), listOf(channelIndex, 1))
 
     fun setCompFiltersIn(channelIndex: Int, on: Boolean): ByteArray =
         OscUtil.encode(compFiltersInAddress(), listOf(channelIndex, if (on) 1 else 0))
@@ -551,6 +575,66 @@ object Pro2Commands {
 
     fun setMainOutColour(index: Int, argbColor: Int): ByteArray =
         OscUtil.encode(mainOutColourAddress(), listOf(index, argbColor))
+
+    // === Main Outs - EQ (6 полос!) и компрессор. НЕ подтверждено реальным
+    // захватом - адреса взяты из датасета muffeeee/midas-pro-series-osc-
+    // commands (enVirtualMainOuts), где параметры описаны текстом ("Set
+    // matrix out EQ frequency for band N" и т.п.), но живьём не
+    // проверялись. Требует проверки на реальном пульте. ===
+    fun mainOutEqFreqAddress(band: Int) = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enPEQFrequencyBand${band + 1}"
+    fun mainOutEqGainAddress(band: Int) = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enPEQGainBand${band + 1}"
+    fun mainOutEqWidthAddress(band: Int) = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enPEQWidthBand${band + 1}"
+    fun mainOutHpFreqAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enGEQHPFrequency"
+    fun mainOutLpFreqAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enGEQLPFrequency"
+    fun mainOutLowNotchFreqAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enGEQLowNotchFrequency"
+    fun mainOutHighNotchFreqAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enGEQHighNotchFrequency"
+
+    fun mainOutCompRatioAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enComLimRatio"
+    fun mainOutCompAttackAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enCompLimAttackTime"
+    fun mainOutCompReleaseAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enCompLimReleaseTime"
+    fun mainOutCompThresholdAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enCompLimThreshold"
+    fun mainOutCompRangeAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enCompLimRange"
+    fun mainOutCompMakeupAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enDynamicsOverallMakeUpGain"
+    fun mainOutCompSoftClipAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enCompLimSoftClip"
+    fun mainOutDelayAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enOutputDelay"
+
+    fun setMainOutEqFreq(index: Int, band: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutEqFreqAddress(band), listOf(index, level.coerceIn(0f, 1f)))
+    fun setMainOutEqGain(index: Int, band: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutEqGainAddress(band), listOf(index, level.coerceIn(0f, 1f)))
+    fun setMainOutEqWidth(index: Int, band: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutEqWidthAddress(band), listOf(index, level.coerceIn(0f, 1f)))
+    fun setMainOutHpFreq(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutHpFreqAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setMainOutLpFreq(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutLpFreqAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setMainOutLowNotchFreq(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutLowNotchFreqAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setMainOutHighNotchFreq(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutHighNotchFreqAddress(), listOf(index, level.coerceIn(0f, 1f)))
+
+    fun setMainOutCompRatio(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutCompRatioAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setMainOutCompAttack(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutCompAttackAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setMainOutCompRelease(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutCompReleaseAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setMainOutCompThreshold(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutCompThresholdAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setMainOutCompRange(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutCompRangeAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setMainOutCompMakeup(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutCompMakeupAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setMainOutCompSoftClip(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutCompSoftClipAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    fun setMainOutDelay(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutDelayAddress(), listOf(index, level.coerceIn(0f, 1f)))
+
+    fun getMainOutEqFreq(index: Int, band: Int): ByteArray = OscUtil.encode(mainOutEqFreqAddress(band), listOf(index))
+    fun getMainOutEqGain(index: Int, band: Int): ByteArray = OscUtil.encode(mainOutEqGainAddress(band), listOf(index))
+    fun getMainOutEqWidth(index: Int, band: Int): ByteArray = OscUtil.encode(mainOutEqWidthAddress(band), listOf(index))
+    fun getMainOutCompRatio(index: Int): ByteArray = OscUtil.encode(mainOutCompRatioAddress(), listOf(index))
+    fun getMainOutCompThreshold(index: Int): ByteArray = OscUtil.encode(mainOutCompThresholdAddress(), listOf(index))
 
     // === Посыл канала на aux-шину (НЕ подтверждено реальным захватом) ===
     // В самом пульте это называется "SubSend", не "AuxSend" - у каждой из 16

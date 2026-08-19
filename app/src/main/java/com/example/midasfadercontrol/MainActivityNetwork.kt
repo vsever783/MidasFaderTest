@@ -605,6 +605,54 @@ import java.net.SocketTimeoutException
         }
     }
 
+    internal fun MainActivity.subscribeMainOutExtras(index: Int) {
+        val sock = socket ?: return
+        val address = consoleAddress ?: return
+        val port = consolePort
+        val token = sessionToken ?: return
+        if (mainOutExtrasSubscribed.contains(index)) return
+        mainOutExtrasSubscribed.add(index)
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val sid = sessionId
+            val subs = mutableListOf<Pair<String, Subscription>>()
+            for (band in 0 until 6) {
+                subs.add("/h_${sid}_mo${index}_eqfreq$band" to Subscription(index, ParamKind.EQ_FREQ, eqBand = band))
+                subs.add("/h_${sid}_mo${index}_eqgain$band" to Subscription(index, ParamKind.EQ_GAIN, eqBand = band))
+                subs.add("/h_${sid}_mo${index}_eqwidth$band" to Subscription(index, ParamKind.EQ_WIDTH, eqBand = band))
+            }
+            val paths = mutableMapOf<String, String>()
+            for (band in 0 until 6) {
+                paths["/h_${sid}_mo${index}_eqfreq$band"] = Pro2Commands.mainOutEqFreqAddress(band)
+                paths["/h_${sid}_mo${index}_eqgain$band"] = Pro2Commands.mainOutEqGainAddress(band)
+                paths["/h_${sid}_mo${index}_eqwidth$band"] = Pro2Commands.mainOutEqWidthAddress(band)
+            }
+            subs.add("/h_${sid}_mo${index}_compratio" to Subscription(index, ParamKind.COMP_RATIO))
+            subs.add("/h_${sid}_mo${index}_compattack" to Subscription(index, ParamKind.COMP_ATTACK))
+            subs.add("/h_${sid}_mo${index}_comprelease" to Subscription(index, ParamKind.COMP_RELEASE))
+            subs.add("/h_${sid}_mo${index}_compthreshold" to Subscription(index, ParamKind.COMP_THRESHOLD))
+            subs.add("/h_${sid}_mo${index}_compmakeup" to Subscription(index, ParamKind.COMP_MAKEUP))
+            paths["/h_${sid}_mo${index}_compratio"] = Pro2Commands.mainOutCompRatioAddress()
+            paths["/h_${sid}_mo${index}_compattack"] = Pro2Commands.mainOutCompAttackAddress()
+            paths["/h_${sid}_mo${index}_comprelease"] = Pro2Commands.mainOutCompReleaseAddress()
+            paths["/h_${sid}_mo${index}_compthreshold"] = Pro2Commands.mainOutCompThresholdAddress()
+            paths["/h_${sid}_mo${index}_compmakeup"] = Pro2Commands.mainOutCompMakeupAddress()
+
+            withContext(Dispatchers.Main) {
+                for ((handle, sub) in subs) mainOutSubscriptions[handle] = sub
+            }
+            for ((handle, sub) in subs) {
+                val path = paths[handle] ?: continue
+                try {
+                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, index, index, token))
+                } catch (e: Exception) {
+                    // не критично
+                }
+                delay(2)
+            }
+        }
+    }
+
     internal fun MainActivity.subscribeEq(channel: Int) {
         val sock = socket ?: return
         val address = consoleAddress ?: return

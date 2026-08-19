@@ -130,6 +130,27 @@ data class MainOutData(
     var fader: Float = 0f,
     var mutedLocal: Boolean = false,
     var name: String = "",
-    var colourArgb: Int? = null
+    var colourArgb: Int? = null,
+    // EQ - 6 полос (не 4, как у канала!) + HP/LP/notch фильтры.
+    // НЕ подтверждено реальным захватом - взято из датасета
+    // muffeeee/midas-pro-series-osc-commands (enVirtualMainOuts), где эти
+    // параметры описаны текстом ("Set matrix out EQ frequency for band N"
+    // и т.п.), но не проверялись живьём.
+    val eqFreq: FloatArray = FloatArray(6),
+    val eqGain: FloatArray = FloatArray(6),
+    val eqWidth: FloatArray = FloatArray(6),
+    var hpFreq: Float = 0f,
+    var lpFreq: Float = 0f,
+    var lowNotchFreq: Float = 0f,
+    var highNotchFreq: Float = 0f,
+    // Компрессор - тот же набор, что и у канала, плюс range и soft clip.
+    var compRatio: Float = 0f,
+    var compAttack: Float = 0f,
+    var compRelease: Float = 0f,
+    var compThreshold: Float = 0f,
+    var compRange: Float = 0f,
+    var compMakeup: Float = 0f,
+    var compSoftClip: Float = 0f,
+    var outputDelay: Float = 0f
 )
 

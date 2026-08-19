@@ -59,6 +59,7 @@ object ConnectionHolder {
     val gateSubscribed = mutableSetOf<Int>()
     val inputExtrasSubscribed = mutableSetOf<Int>()
     val compGateExtrasSubscribed = mutableSetOf<Int>()
+    val mainOutExtrasSubscribed = mutableSetOf<Int>()
     val channelData = Array(56) { ChannelData() }
     // По мануалу у Pro2 3 мастер-канала.
     val masterData = Array(3) { MasterData() }

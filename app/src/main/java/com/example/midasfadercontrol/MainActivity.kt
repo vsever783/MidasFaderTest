@@ -85,6 +85,7 @@ class MainActivity : AppCompatActivity() {
     internal val gateSubscribed get() = ConnectionHolder.gateSubscribed
     internal val inputExtrasSubscribed get() = ConnectionHolder.inputExtrasSubscribed
     internal val compGateExtrasSubscribed get() = ConnectionHolder.compGateExtrasSubscribed
+    internal val mainOutExtrasSubscribed get() = ConnectionHolder.mainOutExtrasSubscribed
 
     internal data class ChannelUi(
         val rootView: android.view.View,
@@ -205,6 +206,10 @@ class MainActivity : AppCompatActivity() {
     // обновления кнопок push-ответами) и сами кнопки по ключу "тип:индекс".
     private var openVcaMembersIndex: Int? = null
     private val vcaMemberButtons = mutableMapOf<String, Button>()
+    // Открытый экран "MAIN N DETAIL" (EQ/компрессор) - для live-обновления
+    // ползунков при входящих push, пока экран виден.
+    private var openMainOutDetailIndex: Int? = null
+    private val mainOutDetailControls = mutableMapOf<String, SeekBar>()
     private var monitorChannelLabels: Array<TextView?> = arrayOfNulls(56)
     private val monitorBankButtons = mutableListOf<Button>()
     private var monitorBankStart = 0
@@ -892,6 +897,7 @@ class MainActivity : AppCompatActivity() {
                 onSoloB = { /* Solo B у Main Outs не подтверждено, кнопка скрыта. */ },
                 showSoloB = false
             )
+            ui.headerView.setOnClickListener { openMainOutDetail(m) }
             mainOutStrips.add(ui)
         }
     }
@@ -1347,7 +1353,7 @@ class MainActivity : AppCompatActivity() {
                     val mode = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
                     ConnectionHolder.channelData[sub.channel].compMode = mode
                     if (openDetailChannel == sub.channel) {
-                        detailCompDynViews?.modeText?.text = "MODE: $mode"
+                        detailCompDynViews?.modeText?.text = "MODE: $mode (тап - переключить)"
                     }
                 }
             }
@@ -1356,7 +1362,7 @@ class MainActivity : AppCompatActivity() {
                     val mode = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
                     ConnectionHolder.channelData[sub.channel].gateMode = mode
                     if (openDetailChannel == sub.channel) {
-                        detailGateDynViews?.modeText?.text = "MODE: $mode"
+                        detailGateDynViews?.modeText?.text = "MODE: $mode (тап - переключить)"
                     }
                 }
             }
@@ -1686,6 +1692,29 @@ class MainActivity : AppCompatActivity() {
                 if (blob.isNotEmpty()) {
                     val level = ((blob[0].toInt() and 0xFF) / 255f).coerceIn(0f, 1f)
                     updateSimpleStripMeter(mainOutStrips, sub.channel, level)
+                }
+            }
+            ParamKind.EQ_FREQ, ParamKind.EQ_GAIN, ParamKind.EQ_WIDTH, ParamKind.COMP_RATIO,
+            ParamKind.COMP_ATTACK, ParamKind.COMP_RELEASE, ParamKind.COMP_THRESHOLD, ParamKind.COMP_MAKEUP -> {
+                if (blob.size < 4) return
+                val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).float.coerceIn(0f, 1f)
+                val data = ConnectionHolder.mainOutData.getOrNull(sub.channel) ?: return
+                when (sub.kind) {
+                    ParamKind.EQ_FREQ -> data.eqFreq.getOrNull(sub.eqBand)?.let { data.eqFreq[sub.eqBand] = level }
+                    ParamKind.EQ_GAIN -> data.eqGain.getOrNull(sub.eqBand)?.let { data.eqGain[sub.eqBand] = level }
+                    ParamKind.EQ_WIDTH -> data.eqWidth.getOrNull(sub.eqBand)?.let { data.eqWidth[sub.eqBand] = level }
+                    ParamKind.COMP_RATIO -> data.compRatio = level
+                    ParamKind.COMP_ATTACK -> data.compAttack = level
+                    ParamKind.COMP_RELEASE -> data.compRelease = level
+                    ParamKind.COMP_THRESHOLD -> data.compThreshold = level
+                    ParamKind.COMP_MAKEUP -> data.compMakeup = level
+                    else -> {}
+                }
+                // Если детальный экран этого Main Out сейчас открыт - обновляем живьём.
+                if (openMainOutDetailIndex == sub.channel) {
+                    mainOutDetailControls["${sub.kind}:${sub.eqBand}"]?.let { seek ->
+                        seek.progress = (level * 1000).toInt()
+                    }
                 }
             }
             else -> {}
@@ -2150,6 +2179,140 @@ class MainActivity : AppCompatActivity() {
         // тому, что уже было известно локально (может быть пусто при первом
         // открытии), а push-ответы дальше подкрасят их правильно вживую.
         subscribeVcaMembers(vcaIndex)
+    }
+
+    /**
+     * Детальный экран Main Out: 6-полосный EQ + компрессор + HP/LP/notch
+     * фильтры. НЕ подтверждено реальным захватом - адреса из датасета
+     * muffeeee/midas-pro-series-osc-commands (см. заметки в Pro2Commands.kt
+     * у mainOutEq*/mainOutComp* функций). Значения показаны как есть
+     * (0.00-1.00), без пересчёта в дБ/Гц - калибровочных пар для Main Out
+     * ещё нет (в отличие от канального компрессора).
+     */
+    private fun openMainOutDetail(index: Int) {
+        val view = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#000000"))
+            setPadding(16, 16, 16, 40)
+        }
+        val scroll = android.widget.ScrollView(this).apply { addView(view) }
+        channelDetailContainer.removeAllViews()
+        channelDetailContainer.addView(scroll)
+        channelDetailContainer.visibility = android.view.View.VISIBLE
+
+        openMainOutDetailIndex = index
+        mainOutDetailControls.clear()
+
+        val topBar = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+        }
+        val backBtn = Button(this).apply {
+            text = "⟵"
+            setOnClickListener {
+                channelDetailContainer.visibility = android.view.View.GONE
+                channelDetailContainer.removeAllViews()
+                openMainOutDetailIndex = null
+                mainOutDetailControls.clear()
+            }
+        }
+        val title = TextView(this).apply {
+            text = "MAIN ${index + 1} DETAIL"
+            setTextColor(Color.parseColor("#ff9f0a"))
+            textSize = 18f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(16, 0, 0, 0)
+        }
+        topBar.addView(backBtn)
+        topBar.addView(title)
+        view.addView(topBar)
+
+        val data = ConnectionHolder.mainOutData[index]
+
+        fun sectionHeader(text: String) {
+            view.addView(TextView(this).apply {
+                this.text = text
+                setTextColor(Color.parseColor("#8e8e93"))
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                textSize = 12f
+                setPadding(0, 24, 0, 6)
+            })
+        }
+
+        fun addSlider(key: String, label: String, initial: Float, onChange: (Float) -> Unit) {
+            val row = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            val labelView = TextView(this).apply {
+                text = label
+                setTextColor(Color.parseColor("#ffffff"))
+                textSize = 12f
+                layoutParams = android.widget.LinearLayout.LayoutParams(160, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
+            }
+            val valueView = TextView(this).apply {
+                text = "%.2f".format(initial)
+                setTextColor(Color.parseColor("#ff9f0a"))
+                textSize = 11f
+                layoutParams = android.widget.LinearLayout.LayoutParams(60, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT)
+            }
+            val seek = SeekBar(this).apply {
+                max = 1000
+                progress = (initial * 1000).toInt()
+                progressTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#ff9f0a"))
+                thumbTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
+                        if (!fromUser) return
+                        val level = progress / 1000f
+                        valueView.text = "%.2f".format(level)
+                        onChange(level)
+                    }
+                    override fun onStartTrackingTouch(sb: SeekBar?) {}
+                    override fun onStopTrackingTouch(sb: SeekBar?) {}
+                })
+            }
+            mainOutDetailControls[key] = seek
+            row.addView(labelView)
+            row.addView(seek)
+            row.addView(valueView)
+            view.addView(row, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 4 })
+        }
+
+        sectionHeader("КОМПРЕССОР")
+        addSlider("${ParamKind.COMP_RATIO}:0", "Ratio", data.compRatio) { l -> data.compRatio = l; sendRawAsync(Pro2Commands.setMainOutCompRatio(index, l)) }
+        addSlider("${ParamKind.COMP_ATTACK}:0", "Attack", data.compAttack) { l -> data.compAttack = l; sendRawAsync(Pro2Commands.setMainOutCompAttack(index, l)) }
+        addSlider("${ParamKind.COMP_RELEASE}:0", "Release", data.compRelease) { l -> data.compRelease = l; sendRawAsync(Pro2Commands.setMainOutCompRelease(index, l)) }
+        addSlider("${ParamKind.COMP_THRESHOLD}:0", "Threshold", data.compThreshold) { l -> data.compThreshold = l; sendRawAsync(Pro2Commands.setMainOutCompThreshold(index, l)) }
+        addSlider("range:0", "Range", data.compRange) { l -> data.compRange = l; sendRawAsync(Pro2Commands.setMainOutCompRange(index, l)) }
+        addSlider("${ParamKind.COMP_MAKEUP}:0", "Makeup Gain", data.compMakeup) { l -> data.compMakeup = l; sendRawAsync(Pro2Commands.setMainOutCompMakeup(index, l)) }
+        addSlider("softclip:0", "Soft Clip", data.compSoftClip) { l -> data.compSoftClip = l; sendRawAsync(Pro2Commands.setMainOutCompSoftClip(index, l)) }
+
+        sectionHeader("ФИЛЬТРЫ")
+        addSlider("hp:0", "HP Freq", data.hpFreq) { l -> data.hpFreq = l; sendRawAsync(Pro2Commands.setMainOutHpFreq(index, l)) }
+        addSlider("lp:0", "LP Freq", data.lpFreq) { l -> data.lpFreq = l; sendRawAsync(Pro2Commands.setMainOutLpFreq(index, l)) }
+        addSlider("lownotch:0", "Low Notch", data.lowNotchFreq) { l -> data.lowNotchFreq = l; sendRawAsync(Pro2Commands.setMainOutLowNotchFreq(index, l)) }
+        addSlider("highnotch:0", "High Notch", data.highNotchFreq) { l -> data.highNotchFreq = l; sendRawAsync(Pro2Commands.setMainOutHighNotchFreq(index, l)) }
+        addSlider("delay:0", "Output Delay", data.outputDelay) { l -> data.outputDelay = l; sendRawAsync(Pro2Commands.setMainOutDelay(index, l)) }
+
+        sectionHeader("EQ - 6 ПОЛОС")
+        for (band in 0 until 6) {
+            view.addView(TextView(this).apply {
+                text = "Band ${band + 1}"
+                setTextColor(Color.parseColor("#ff9f0a"))
+                textSize = 11f
+                setPadding(0, 10, 0, 2)
+            })
+            addSlider("${ParamKind.EQ_FREQ}:$band", "Freq", data.eqFreq[band]) { l -> data.eqFreq[band] = l; sendRawAsync(Pro2Commands.setMainOutEqFreq(index, band, l)) }
+            addSlider("${ParamKind.EQ_GAIN}:$band", "Gain", data.eqGain[band]) { l -> data.eqGain[band] = l; sendRawAsync(Pro2Commands.setMainOutEqGain(index, band, l)) }
+            addSlider("${ParamKind.EQ_WIDTH}:$band", "Width", data.eqWidth[band]) { l -> data.eqWidth[band] = l; sendRawAsync(Pro2Commands.setMainOutEqWidth(index, band, l)) }
+        }
+
+        subscribeMainOutExtras(index)
     }
 
     private fun openChannelDetail(channel: Int) {
@@ -3142,13 +3305,21 @@ class MainActivity : AppCompatActivity() {
             android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { bottomMargin = 4 })
 
-        // Режим (компрессор/gate) - ТОЛЬКО ЧТЕНИЕ, не знаем формат SET
-        // (менялось прямо на экране пульта в захвате, см. заметку в
-        // Pro2Commands.kt). Показываем как текст под заголовком.
+        // Режим (компрессор/gate) - ЧТЕНИЕ подтверждено реальным захватом.
+        // ПЕРЕКЛЮЧЕНИЕ (тап) - НЕ подтверждено (см. заметку у
+        // compDetectorModeCycleAddress/gateModeCycleAddress в Pro2Commands.kt),
+        // построено по описанию из датасета muffeeee ("cycles to next mode") -
+        // проверить на реальном пульте.
         val modeText = TextView(this).apply {
-            text = "MODE: —"
-            setTextColor(Color.parseColor("#8e8e93"))
+            text = "MODE: — (нажмите для переключения)"
+            setTextColor(accent)
             textSize = 11f
+            setOnClickListener {
+                sendRawAsync(
+                    if (isGate) Pro2Commands.setGateModeNext(channel)
+                    else Pro2Commands.setCompDetectorModeNext(channel)
+                )
+            }
         }
         container.addView(modeText, android.widget.LinearLayout.LayoutParams(
             android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
