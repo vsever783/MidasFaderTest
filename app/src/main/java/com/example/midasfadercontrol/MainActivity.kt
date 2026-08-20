@@ -43,6 +43,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnConnect: Button
     internal lateinit var textStatus: TextView
     internal lateinit var textConnectionStatus: TextView
+    // Форма подключения (IP/Port/Connect) - есть только в activity_main.xml
+    // (режим инженера), в мониторном layout её нет - поэтому nullable, а
+    // не lateinit, чтобы не упасть при обращении из общей connectAndSync().
+    private var containerConnectForm: android.widget.LinearLayout? = null
+    private var btnChangeConnection: Button? = null
     private lateinit var containerChannels: android.widget.LinearLayout
     private lateinit var channelDetailContainer: android.widget.FrameLayout
 
@@ -138,13 +143,9 @@ class MainActivity : AppCompatActivity() {
         supportActionBar?.hide()
 
         // Системные рамки (статус-бар сверху, навигация снизу) - чёрные,
-        // чтобы не выбивались белой полосой на фоне тёмного интерфейса.
-        window.statusBarColor = Color.BLACK
-        window.navigationBarColor = Color.BLACK
-        @Suppress("DEPRECATION")
-        window.decorView.systemUiVisibility = window.decorView.systemUiVisibility and
-            android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv() and
-            android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
+        // одинаково в любой ориентации (см. RoleSelectActivity.kt - общая
+        // функция для всех экранов приложения).
+        applyBlackSystemBars()
 
         if (appMode == MODE_MONITOR) {
             onCreateMonitor()
@@ -161,6 +162,12 @@ class MainActivity : AppCompatActivity() {
         btnConnect = findViewById(R.id.btnConnect)
         textStatus = findViewById(R.id.textStatus)
         textConnectionStatus = findViewById(R.id.textConnectionStatus)
+        containerConnectForm = findViewById(R.id.containerConnectForm)
+        btnChangeConnection = findViewById(R.id.btnChangeConnection)
+        btnChangeConnection?.setOnClickListener {
+            containerConnectForm?.visibility = android.view.View.VISIBLE
+            btnChangeConnection?.visibility = android.view.View.GONE
+        }
         containerChannels = findViewById(R.id.containerChannels)
         channelDetailContainer = findViewById(R.id.channelDetailContainer)
 
@@ -191,6 +198,7 @@ class MainActivity : AppCompatActivity() {
             textConnectionStatus.text = "● Connected"
             textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
             textStatus.text = "Connection restored after screen rotation"
+            collapseConnectForm()
             restoreUiFromChannelData()
             startReceiveLoop(existingSocket)
             startPollLoop(existingSocket, existingAddress, consolePort)
@@ -225,6 +233,10 @@ class MainActivity : AppCompatActivity() {
     private var openGroupDetailKind: String? = null // "aux" | "mainout"
     private var openGroupDetailIndex: Int? = null
     private val groupDetailKnobs = mutableMapOf<String, RotaryKnobView>()
+    // LINK-кнопка и кнопки cycle-режимов (STYLE/FILTER BANDWIDTH/KNEE) на
+    // общем экране деталей - для live-обновления, пока экран открыт.
+    private var groupDetailLinkButton: Button? = null
+    private val groupDetailCycleButtons = mutableMapOf<String, Button>()
     private var monitorChannelLabels: Array<TextView?> = arrayOfNulls(56)
     private val monitorBankButtons = mutableListOf<Button>()
     private var monitorBankStart = 0
@@ -541,7 +553,7 @@ class MainActivity : AppCompatActivity() {
             fader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                     val level = progress / 1000f
-                    levelValueText.text = "%.2f".format(level)
+                    levelValueText.text = formatFaderDb(level)
                     if (!fromUser || ui.suppressEvents) return
                     ConnectionHolder.channelData[i].fader = level
                     val now = System.currentTimeMillis()
@@ -773,7 +785,7 @@ class MainActivity : AppCompatActivity() {
         fader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                 val level = progress / 1000f
-                levelText.text = "%.2f".format(level)
+                levelText.text = formatFaderDb(level)
                 if (!fromUser || ui.suppressEvents) return
                 val now = System.currentTimeMillis()
                 if (now - ui.lastFaderSendTime >= minSendIntervalMs) {
@@ -809,7 +821,7 @@ class MainActivity : AppCompatActivity() {
         // известные значения, не дожидаясь нового push.
         ui.suppressEvents = true
         fader.progress = (initialFader * 1000).toInt()
-        levelText.text = "%.2f".format(initialFader)
+        levelText.text = formatFaderDb(initialFader)
         ui.suppressEvents = false
         ui.mutedLocal = initialMuted
         muteButton.setBackgroundColor(Color.parseColor(if (initialMuted) "#ff3b30" else "#3a3a3c"))
@@ -938,6 +950,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Сворачивает форму IP/Port/Connect в компактную кнопку "Change" -
+     * освобождает вертикальное место под реальные органы управления, раз
+     * форма нужна только один раз (до подключения), а не постоянно.
+     * Безопасно вызывать и в мониторном режиме (там просто null, ничего не произойдёт).
+     */
+    internal fun collapseConnectForm() {
+        containerConnectForm?.visibility = android.view.View.GONE
+        btnChangeConnection?.visibility = android.view.View.VISIBLE
+    }
+
     // Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX BUSES, MASTER - мастер
     // намеренно в конце, по просьбе (обычно с ним работают реже всего).
     private var currentStripMode = StripMode.CHANNELS
@@ -969,20 +992,22 @@ class MainActivity : AppCompatActivity() {
             return btn
         }
 
-        // Порядок как попросили: каналы, aux returns, aux-шины, VCA, мастер - в конце.
+        // Порядок как попросили: каналы, aux-шины, aux возвраты, матрицы
+        // (main outs), мастер - VCA специально в конце (не входит в
+        // запрошенный список приоритетов).
         val btnChannels = makeTab("CHANNELS", StripMode.CHANNELS)
-        val btnAux = makeTab("AUX RETURNS", StripMode.AUX_RETURNS)
         val btnAuxBus = makeTab("AUX BUSES", StripMode.AUX_BUS)
-        val btnVca = makeTab("VCA", StripMode.VCA)
+        val btnAux = makeTab("AUX RETURNS", StripMode.AUX_RETURNS)
+        val btnMainOuts = makeTab("MATRIX", StripMode.MAIN_OUTS)
         val btnMaster = makeTab("MASTER", StripMode.MASTER)
-        val btnMainOuts = makeTab("MAIN OUTS", StripMode.MAIN_OUTS)
+        val btnVca = makeTab("VCA", StripMode.VCA)
         modeButtons = mapOf(
             StripMode.CHANNELS to btnChannels,
-            StripMode.AUX_RETURNS to btnAux,
             StripMode.AUX_BUS to btnAuxBus,
-            StripMode.VCA to btnVca,
+            StripMode.AUX_RETURNS to btnAux,
+            StripMode.MAIN_OUTS to btnMainOuts,
             StripMode.MASTER to btnMaster,
-            StripMode.MAIN_OUTS to btnMainOuts
+            StripMode.VCA to btnVca
         )
 
         switchStripMode(ConnectionHolder.uiStripMode)
@@ -1437,6 +1462,12 @@ class MainActivity : AppCompatActivity() {
                     updateGateParamUi(sub.channel, sub.kind, level)
                 }
             }
+            // Presence/Bus Trim/Style/Filter Bandwidth/Knee - параметры,
+            // подтверждённые только у Main Out, у обычных каналов их нет
+            // (сюда никогда не должно прийти, но 'when' по enum обязан
+            // быть исчерпывающим).
+            ParamKind.COMP_PRESENCE, ParamKind.BUS_TRIM, ParamKind.COMP_STYLE,
+            ParamKind.COMP_FILTER_BANDWIDTH, ParamKind.COMP_KNEE -> {}
         }
     }
 
@@ -1545,7 +1576,7 @@ class MainActivity : AppCompatActivity() {
                 val ui = auxBusStrips.getOrNull(sub.channel) ?: return
                 ui.suppressEvents = true
                 ui.fader.progress = (level * 1000).toInt()
-                ui.levelText.text = "%.2f".format(level)
+                ui.levelText.text = formatFaderDb(level)
                 ui.suppressEvents = false
             }
             ParamKind.MUTE -> {
@@ -1599,6 +1630,14 @@ class MainActivity : AppCompatActivity() {
                     auxBusStrips.getOrNull(sub.channel)?.headerView?.setBackgroundColor(argb)
                 }
             }
+            ParamKind.LINK -> {
+                if (blob.size < 4) return
+                val linked = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.auxBusData.getOrNull(sub.channel)?.linked = linked
+                if (openGroupDetailKind == "aux" && openGroupDetailIndex == sub.channel) {
+                    groupDetailLinkButton?.setBackgroundColor(Color.parseColor(if (linked) "#ff9f0a" else "#3a3a3c"))
+                }
+            }
             ParamKind.EQ_FREQ, ParamKind.EQ_GAIN, ParamKind.EQ_WIDTH, ParamKind.COMP_RATIO,
             ParamKind.COMP_ATTACK, ParamKind.COMP_RELEASE, ParamKind.COMP_THRESHOLD, ParamKind.COMP_MAKEUP -> {
                 if (blob.size < 4) return
@@ -1632,7 +1671,7 @@ class MainActivity : AppCompatActivity() {
                 val ui = vcaStrips.getOrNull(sub.channel) ?: return
                 ui.suppressEvents = true
                 ui.fader.progress = (level * 1000).toInt()
-                ui.levelText.text = "%.2f".format(level)
+                ui.levelText.text = formatFaderDb(level)
                 ui.suppressEvents = false
             }
             ParamKind.MUTE -> {
@@ -1711,7 +1750,7 @@ class MainActivity : AppCompatActivity() {
                 val ui = mainOutStrips.getOrNull(sub.channel) ?: return
                 ui.suppressEvents = true
                 ui.fader.progress = (level * 1000).toInt()
-                ui.levelText.text = "%.2f".format(level)
+                ui.levelText.text = formatFaderDb(level)
                 ui.suppressEvents = false
             }
             ParamKind.MUTE -> {
@@ -1755,7 +1794,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             ParamKind.EQ_FREQ, ParamKind.EQ_GAIN, ParamKind.EQ_WIDTH, ParamKind.COMP_RATIO,
-            ParamKind.COMP_ATTACK, ParamKind.COMP_RELEASE, ParamKind.COMP_THRESHOLD, ParamKind.COMP_MAKEUP -> {
+            ParamKind.COMP_ATTACK, ParamKind.COMP_RELEASE, ParamKind.COMP_THRESHOLD, ParamKind.COMP_MAKEUP,
+            ParamKind.COMP_PRESENCE, ParamKind.BUS_TRIM -> {
                 if (blob.size < 4) return
                 val level = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).float.coerceIn(0f, 1f)
                 val data = ConnectionHolder.mainOutData.getOrNull(sub.channel) ?: return
@@ -1768,11 +1808,40 @@ class MainActivity : AppCompatActivity() {
                     ParamKind.COMP_RELEASE -> data.compRelease = level
                     ParamKind.COMP_THRESHOLD -> data.compThreshold = level
                     ParamKind.COMP_MAKEUP -> data.compMakeup = level
+                    ParamKind.COMP_PRESENCE -> data.compPresence = level
+                    ParamKind.BUS_TRIM -> data.busTrim = level
                     else -> {}
                 }
                 // Если детальный экран этого Main Out сейчас открыт - обновляем живьём.
                 if (openGroupDetailKind == "mainout" && openGroupDetailIndex == sub.channel) {
                     groupDetailKnobs["${sub.kind}:${sub.eqBand}"]?.value = level
+                }
+            }
+            ParamKind.LINK -> {
+                if (blob.size < 4) return
+                val linked = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                ConnectionHolder.mainOutData.getOrNull(sub.channel)?.linked = linked
+                if (openGroupDetailKind == "mainout" && openGroupDetailIndex == sub.channel) {
+                    groupDetailLinkButton?.setBackgroundColor(Color.parseColor(if (linked) "#ff9f0a" else "#3a3a3c"))
+                }
+            }
+            ParamKind.COMP_STYLE, ParamKind.COMP_FILTER_BANDWIDTH, ParamKind.COMP_KNEE -> {
+                if (blob.size < 4) return
+                val mode = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+                val data = ConnectionHolder.mainOutData.getOrNull(sub.channel) ?: return
+                when (sub.kind) {
+                    ParamKind.COMP_STYLE -> data.compStyle = mode
+                    ParamKind.COMP_FILTER_BANDWIDTH -> data.compFilterBandwidth = mode
+                    ParamKind.COMP_KNEE -> data.compKnee = mode
+                    else -> {}
+                }
+                if (openGroupDetailKind == "mainout" && openGroupDetailIndex == sub.channel) {
+                    val label = when (sub.kind) {
+                        ParamKind.COMP_STYLE -> "STYLE"
+                        ParamKind.COMP_FILTER_BANDWIDTH -> "FILTER BANDWIDTH"
+                        else -> "KNEE"
+                    }
+                    groupDetailCycleButtons["${sub.kind}"]?.text = "$label: $mode"
                 }
             }
             else -> {}
@@ -2051,6 +2120,7 @@ class MainActivity : AppCompatActivity() {
                 EqCurveView.formatHz(EqCurveView.rawToHzPublic(level, bandId))
             }
             ParamKind.EQ_WIDTH -> EqCurveView.formatWidth(EqCurveView.rawToWidthPublic(level))
+            ParamKind.EQ_GAIN -> EqCurveView.formatEqGain(level)
             else -> "%.2f".format(level)
         }
         if (kind == ParamKind.EQ_FREQ) views.graphView.bands.getOrNull(bandIndex)?.freq = level
@@ -2065,7 +2135,7 @@ class MainActivity : AppCompatActivity() {
         val ui = masterStrips.getOrNull(masterIndex) ?: return
         ui.suppressEvents = true
         ui.fader.progress = (level.coerceIn(0f, 1f) * 1000).toInt()
-        ui.levelText.text = "%.2f".format(level)
+        ui.levelText.text = formatFaderDb(level)
         ui.suppressEvents = false
     }
 
@@ -2091,7 +2161,7 @@ class MainActivity : AppCompatActivity() {
         val ui = auxStrips.getOrNull(auxIndex) ?: return
         ui.suppressEvents = true
         ui.fader.progress = (level.coerceIn(0f, 1f) * 1000).toInt()
-        ui.levelText.text = "%.2f".format(level)
+        ui.levelText.text = formatFaderDb(level)
         ui.suppressEvents = false
     }
 
@@ -2475,6 +2545,7 @@ class MainActivity : AppCompatActivity() {
         openGroupDetailKind = "aux"
         openGroupDetailIndex = index
         groupDetailKnobs.clear()
+        groupDetailCycleButtons.clear()
 
         val data = ConnectionHolder.auxBusData[index]
         view.findViewById<TextView>(R.id.textGroupDetailName).text = data.name.takeIf { it.isNotBlank() } ?: "BUS ${index + 1}"
@@ -2484,6 +2555,8 @@ class MainActivity : AppCompatActivity() {
             openGroupDetailKind = null
             openGroupDetailIndex = null
             groupDetailKnobs.clear()
+            groupDetailLinkButton = null
+            groupDetailCycleButtons.clear()
         }
 
         val muteBtn = view.findViewById<Button>(R.id.groupDetailMute)
@@ -2499,7 +2572,15 @@ class MainActivity : AppCompatActivity() {
         soloBtn.backgroundTintList = null
         fader.max = 1000
         fader.progress = (data.fader * 1000).toInt()
-        levelText.text = "%.2f".format(data.fader)
+        levelText.text = formatFaderDb(data.fader)
+
+        val linkBtn = view.findViewById<Button>(R.id.groupDetailLink)
+        groupDetailLinkButton = linkBtn
+        linkBtn.backgroundTintList = null
+        linkBtn.setBackgroundColor(Color.parseColor(if (data.linked) "#ff9f0a" else "#3a3a3c"))
+        linkBtn.setOnClickListener {
+            sendRawAsync(Pro2Commands.setAuxBusPairingNext(index))
+        }
 
         muteBtn.setOnClickListener {
             val newState = !ConnectionHolder.auxBusData[index].mutedLocal
@@ -2514,7 +2595,7 @@ class MainActivity : AppCompatActivity() {
         fader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                 val level = progress / 1000f
-                levelText.text = "%.2f".format(level)
+                levelText.text = formatFaderDb(level)
                 if (!fromUser) return
                 ConnectionHolder.auxBusData[index].fader = level
                 sendAuxBusFader(index, level)
@@ -2574,6 +2655,7 @@ class MainActivity : AppCompatActivity() {
         openGroupDetailKind = "mainout"
         openGroupDetailIndex = index
         groupDetailKnobs.clear()
+        groupDetailCycleButtons.clear()
 
         val data = ConnectionHolder.mainOutData[index]
         view.findViewById<TextView>(R.id.textGroupDetailName).text = data.name.takeIf { it.isNotBlank() } ?: "MAIN ${index + 1}"
@@ -2583,6 +2665,8 @@ class MainActivity : AppCompatActivity() {
             openGroupDetailKind = null
             openGroupDetailIndex = null
             groupDetailKnobs.clear()
+            groupDetailLinkButton = null
+            groupDetailCycleButtons.clear()
         }
 
         val muteBtn = view.findViewById<Button>(R.id.groupDetailMute)
@@ -2598,7 +2682,15 @@ class MainActivity : AppCompatActivity() {
         soloBtn.backgroundTintList = null
         fader.max = 1000
         fader.progress = (data.fader * 1000).toInt()
-        levelText.text = "%.2f".format(data.fader)
+        levelText.text = formatFaderDb(data.fader)
+
+        val linkBtn = view.findViewById<Button>(R.id.groupDetailLink)
+        groupDetailLinkButton = linkBtn
+        linkBtn.backgroundTintList = null
+        linkBtn.setBackgroundColor(Color.parseColor(if (data.linked) "#ff9f0a" else "#3a3a3c"))
+        linkBtn.setOnClickListener {
+            sendRawAsync(Pro2Commands.setMainOutPairingNext(index))
+        }
 
         muteBtn.setOnClickListener {
             val newState = !ConnectionHolder.mainOutData[index].mutedLocal
@@ -2613,7 +2705,7 @@ class MainActivity : AppCompatActivity() {
         fader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                 val level = progress / 1000f
-                levelText.text = "%.2f".format(level)
+                levelText.text = formatFaderDb(level)
                 if (!fromUser) return
                 ConnectionHolder.mainOutData[index].fader = level
                 sendRawAsync(Pro2Commands.setMainOutFader(index, level))
@@ -2649,6 +2741,13 @@ class MainActivity : AppCompatActivity() {
             sendMakeup = { v -> sendRawAsync(Pro2Commands.setMainOutCompMakeup(index, v)) },
             sendSoftClip = { v -> sendRawAsync(Pro2Commands.setMainOutCompSoftClip(index, v)) }
         )
+
+        // --- Presence, Bus Trim и 3 циклических режима - ТОЛЬКО у Main Out,
+        // подтверждены реальным захватом (all config ipad.pcapng), но не
+        // входят в общий buildGroupCompBlock (он общий с aux-шиной, а для
+        // aux-шины эти параметры вообще не встречались подписанными). ---
+        addMainOutExtraKnobsAndCycles(compContent, index, data)
+
         buildGroupEqBlock(
             eqContent, data,
             sendFreq = { band, v -> sendRawAsync(Pro2Commands.setMainOutEqFreq(index, band, v)) },
@@ -2662,6 +2761,72 @@ class MainActivity : AppCompatActivity() {
         showGroupTab(view, "COMP")
 
         subscribeMainOutExtras(index)
+    }
+
+    /**
+     * Presence (крутилка), Bus Trim (крутилка) и 3 циклических режима
+     * (STYLE / FILTER BANDWIDTH / KNEE - каждый "нажал - переключилось на
+     * следующее") - только у Main Out. Все ПОДТВЕРЖДЕНЫ реальным захватом
+     * трафика как существующие параметры правильного типа, но точные
+     * названия режимов (что означает 0/1/2/...) пульт не прислал - просто
+     * показываем сырой номер, без словесных подписей.
+     */
+    private fun addMainOutExtraKnobsAndCycles(container: android.widget.LinearLayout, index: Int, data: MainOutData) {
+        val accent = Color.parseColor("#ff9f0a")
+
+        fun addKnob(key: String, label: String, initial: Float, kind: ParamKind? = null, onChange: (Float) -> Unit) {
+            val row = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
+            container.addView(row, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 8 })
+            val cell = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            cell.addView(TextView(this).apply { text = label; setTextColor(Color.parseColor("#8e8e93")); textSize = 11f })
+            val knob = RotaryKnobView(this).apply {
+                value = initial
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    (58 * resources.displayMetrics.density).toInt(),
+                    (58 * resources.displayMetrics.density).toInt()
+                ).apply { topMargin = 4; bottomMargin = 4 }
+            }
+            fun fmt(v: Float) = if (kind != null) formatKnobValue(kind, v) else "%.2f".format(v)
+            val valueText = TextView(this).apply { text = fmt(initial); setTextColor(accent); textSize = 12f }
+            knob.onValueChanged = { v -> valueText.text = fmt(v); onChange(v) }
+            cell.addView(knob)
+            cell.addView(valueText)
+            row.addView(cell)
+            // Оставшиеся 2/3 строки - пусто (только одна крутилка каждый раз, специально не растягиваем на всю ширину)
+            repeat(2) { row.addView(android.widget.LinearLayout(this).apply { layoutParams = android.widget.LinearLayout.LayoutParams(0, 0, 1f) }) }
+            groupDetailKnobs[key] = knob
+        }
+
+        addKnob("${ParamKind.COMP_PRESENCE}:0", "PRESENCE", data.compPresence, ParamKind.COMP_PRESENCE) { v -> data.compPresence = v; sendRawAsync(Pro2Commands.setMainOutCompPresence(index, v)) }
+        addKnob("${ParamKind.BUS_TRIM}:0", "BUS TRIM", data.busTrim) { v -> data.busTrim = v; sendRawAsync(Pro2Commands.setMainOutBusTrim(index, v)) }
+
+        fun addCycleButton(kind: ParamKind, label: String, initial: Int, onTap: () -> Unit) {
+            val btn = Button(this).apply {
+                text = "$label: $initial"
+                textSize = 10f
+                minHeight = 0
+                backgroundTintList = null
+                setTextColor(Color.parseColor("#ffffff"))
+                setBackgroundColor(Color.parseColor("#3a3a3c"))
+                setOnClickListener { onTap() }
+            }
+            container.addView(btn, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 8 })
+            groupDetailCycleButtons["$kind"] = btn
+        }
+
+        addCycleButton(ParamKind.COMP_STYLE, "STYLE", data.compStyle) { sendRawAsync(Pro2Commands.setMainOutCompStyleNext(index)) }
+        addCycleButton(ParamKind.COMP_FILTER_BANDWIDTH, "FILTER BANDWIDTH", data.compFilterBandwidth) { sendRawAsync(Pro2Commands.setMainOutCompFilterBandwidthNext(index)) }
+        addCycleButton(ParamKind.COMP_KNEE, "KNEE", data.compKnee) { sendRawAsync(Pro2Commands.setMainOutCompKneeNext(index)) }
     }
 
     /**
@@ -2759,7 +2924,7 @@ class MainActivity : AppCompatActivity() {
         detailFader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                 val level = progress / 1000f
-                detailLevelText.text = "%.2f".format(level)
+                detailLevelText.text = formatFaderDb(level)
                 ui.fader.progress = progress
                 if (!fromUser) return
                 ConnectionHolder.channelData[channel].fader = level
@@ -3438,10 +3603,16 @@ class MainActivity : AppCompatActivity() {
                     sendEqParam(channel, band, ParamKind.EQ_FREQ, freq)
                     sendEqParam(channel, band, ParamKind.EQ_GAIN, gain)
                     detailEqViews?.bands?.getOrNull(bandIndex)?.let {
+                        val curveBandId = when (bandIndex) {
+                            0 -> EqCurveView.BandId.BASS
+                            1 -> EqCurveView.BandId.LOW_MID
+                            2 -> EqCurveView.BandId.MID_HIGH
+                            else -> EqCurveView.BandId.TREBLE
+                        }
                         it.freqKnob.value = freq
-                        it.freqText.text = "%.2f".format(freq)
+                        it.freqText.text = EqCurveView.formatHz(EqCurveView.rawToHzPublic(freq, curveBandId))
                         it.gainKnob.value = gain
-                        it.gainText.text = "%.2f".format(gain)
+                        it.gainText.text = EqCurveView.formatEqGain(gain)
                     }
                 }
             }
@@ -3462,6 +3633,7 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(bandColours[bandIndex])
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
                 textSize = 12f
+                letterSpacing = 0.08f
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f
                 )
@@ -3539,6 +3711,7 @@ class MainActivity : AppCompatActivity() {
                     text = label
                     setTextColor(Color.parseColor("#8e8e93"))
                     textSize = 10f
+                    letterSpacing = 0.06f
                 }
                 val knob = RotaryKnobView(this).apply {
                     value = initial
@@ -3547,10 +3720,12 @@ class MainActivity : AppCompatActivity() {
                         (52 * resources.displayMetrics.density).toInt()
                     ).apply { topMargin = 4; bottomMargin = 4 }
                 }
-                // Для FREQ теперь показываем реальные Гц (подтверждено
-                // приблизительно по фото экрана пульта - см. заметку в
-                // EqCurveView.kt про bandHzRange). GAIN/WIDTH остаются
-                // сырым числом - для них калибровки нет.
+                // Для FREQ показываем реальные Гц, для GAIN - дБ (оба
+                // подтверждены приблизительно по фото экрана пульта - см.
+                // заметку в EqCurveView.kt про bandHzRange/eqGainRangeDb).
+                // WIDTH остаётся сырым числом 0.1-3.0 - это уже сама
+                // реальная единица (что-то вроде октав), просто без
+                // подтверждённой формы зависимости от угла ручки.
                 val eqBandId = when (bandIndex) {
                     0 -> EqCurveView.BandId.BASS
                     1 -> EqCurveView.BandId.LOW_MID
@@ -3560,6 +3735,7 @@ class MainActivity : AppCompatActivity() {
                 fun formatValue(v: Float): String = when (kind) {
                     ParamKind.EQ_FREQ -> EqCurveView.formatHz(EqCurveView.rawToHzPublic(v, eqBandId))
                     ParamKind.EQ_WIDTH -> EqCurveView.formatWidth(EqCurveView.rawToWidthPublic(v))
+                    ParamKind.EQ_GAIN -> EqCurveView.formatEqGain(v)
                     else -> "%.2f".format(v)
                 }
                 val valueText = TextView(this).apply {
@@ -3638,7 +3814,8 @@ class MainActivity : AppCompatActivity() {
             text = if (isGate) "GATE" else "COMPRESSOR"
             setTextColor(accent)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            textSize = 16f
+            textSize = 13f
+            letterSpacing = 0.10f
             layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         val inLocal = if (isGate) data.gateInLocal else data.compInLocal
@@ -3881,6 +4058,38 @@ class MainActivity : AppCompatActivity() {
     private val compThresholdPoints = listOf(0f to -50f, 0.35f to -25f, 0.65f to 0f, 1f to 25f)
     private val compAttackPoints = listOf(0f to 0.2f, 0.35f to 1f, 0.65f to 6f, 1f to 20f)
     private val compReleasePoints = listOf(0f to 0.05f, 0.35f to 0.2f, 0.65f to 0.8f, 1f to 3f)
+    // Три новые таблицы - подтверждены прямо ТЕКСТОМ ОПИСАНИЯ в датасете
+    // muffeeee/midas-pro-series-osc-commands (enDynamicsOverallMakeUpGain/
+    // enCompLimPresence/enCompLimFilterFrequency) - надёжнее обычных
+    // "неподтверждённых" точек: threshold/attack/release выше были
+    // подобраны так же вручную, а когда этот источник нашли позже -
+    // совпали 1-в-1, что хороший знак и для этих трёх.
+    private val compMakeupPoints = listOf(0f to 0f, 0.35f to 8f, 0.65f to 16f, 1f to 24f)
+    private val compPresencePoints = listOf(0f to -100f, 0.35f to -16f, 0.65f to -8f, 1f to -3f)
+    private val compFilterFreqPoints = listOf(0f to 50f, 0.35f to 300f, 0.65f to 2500f, 1f to 15000f)
+
+    /**
+     * Перевод сырого значения фейдера (0.00-1.00) в дБ. НЕ подтверждено
+     * захватом трафика именно для Pro2 - формула взята из документированной
+     * кривой Behringer X32/M32 (Patrick Maillot, X32 OSC Protocol) -
+     * Midas и X32 сделаны на одной инженерной базе (преампы для X32
+     * проектировал именно Midas), и у консолей этого поколения фейдерная
+     * кривая исторически совпадает, но 100% гарантии для Pro2 нет.
+     * Контрольные точки: 0.75 -> 0дБ (унити), 1.0 -> +10дБ, 0 -> -90дБ
+     * (условная "минус бесконечность"). Стоит свериться с показаниями на
+     * самом экране пульта при первой возможности.
+     */
+    private fun rawToFaderDb(v: Float): Float = when {
+        v >= 0.5f -> v * 40f - 30f
+        v >= 0.25f -> v * 80f - 50f
+        v >= 0.0625f -> v * 160f - 70f
+        else -> v * 480f - 90f
+    }
+
+    private fun formatFaderDb(v: Float): String {
+        val db = rawToFaderDb(v.coerceIn(0f, 1f))
+        return if (db <= -89.9f) "-∞ dB" else "%+.1f dB".format(db)
+    }
 
     private fun formatCompThreshold(v: Float): String = "%.1f dB".format(interpolate(v, compThresholdPoints))
     private fun formatCompAttack(v: Float): String = "%.1f ms".format(interpolate(v, compAttackPoints))
@@ -3894,6 +4103,9 @@ class MainActivity : AppCompatActivity() {
         ParamKind.COMP_THRESHOLD -> formatCompThreshold(v)
         ParamKind.COMP_ATTACK -> formatCompAttack(v)
         ParamKind.COMP_RELEASE -> formatCompRelease(v)
+        ParamKind.COMP_MAKEUP -> "%+.1f dB".format(interpolate(v, compMakeupPoints))
+        ParamKind.COMP_PRESENCE -> "%.0f dB".format(interpolate(v, compPresencePoints))
+        ParamKind.COMP_FILTER_FREQ -> EqCurveView.formatHz(interpolate(v, compFilterFreqPoints))
         else -> "%.2f".format(v)
     }
 
@@ -3968,13 +4180,13 @@ class MainActivity : AppCompatActivity() {
         if (ui == null) return
         ui.suppressEvents = true
         ui.fader.progress = (level.coerceIn(0f, 1f) * 1000).toInt()
-        ui.levelValueText.text = "%.2f".format(level)
+        ui.levelValueText.text = formatFaderDb(level)
         ui.suppressEvents = false
 
         if (openDetailChannel == channel) {
             val dv = detailViews ?: return
             dv.fader.progress = (level.coerceIn(0f, 1f) * 1000).toInt()
-            dv.levelText.text = "%.2f".format(level)
+            dv.levelText.text = formatFaderDb(level)
         }
     }
 

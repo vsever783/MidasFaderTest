@@ -34,4 +34,6 @@
     <dimen name="monitor_channel_value_margin">2dp</dimen>
     <dimen name="monitor_channel_strip_bottom_padding">4dp</dimen>
     <dimen name="monitor_channel_fader_top_margin">1dp</dimen>
+    <dimen name="monitor_channel_strip_width">76dp</dimen>
+    <dimen name="monitor_channel_fader_thickness">26dp</dimen>
 </resources>

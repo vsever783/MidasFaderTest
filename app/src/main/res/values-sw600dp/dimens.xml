@@ -1,9 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Планшеты (экран с наименьшей стороной от 600dp - iPad-подобные
+    размеры и крупнее) - просторнее по всем параметрам, не только по
+    ширине полосы канала. Раньше здесь были заданы только 5 значений
+    (ширина полосы/крутилка/фейдер) - остальные "утекали" либо в
+    портретные телефонные значения (values/dimens.xml), либо, что хуже,
+    в СЖАТЫЕ альбомные телефонные (values-land/dimens.xml, рассчитанные
+    на маленькую высоту телефона в лежачем положении) - на планшете в
+    альбомной ориентации высоты вагон, сжимать нечего, но без этого файла
+    приложение всё равно сжималось "как на телефоне". У планшета высоты
+    достаточно в обеих ориентациях, поэтому одного набора значений хватает
+    без отдельного sw600dp-land.
+-->
 <resources>
-    <!-- Планшеты (экран с наименьшей стороной от 600dp) — крупнее и просторнее -->
     <dimen name="channel_strip_width">130dp</dimen>
     <dimen name="channel_number_text_size">20sp</dimen>
     <dimen name="channel_label_text_size">14sp</dimen>
     <dimen name="channel_knob_size">56dp</dimen>
     <dimen name="channel_fader_thickness">44dp</dimen>
+
+    <dimen name="channel_header_padding">10dp</dimen>
+    <dimen name="channel_solo_height">36dp</dimen>
+    <dimen name="channel_mute_height">44dp</dimen>
+    <dimen name="channel_button_margin_top">14dp</dimen>
+    <dimen name="channel_knob_margin_top">14dp</dimen>
+    <dimen name="channel_level_margin_top">16dp</dimen>
+    <dimen name="channel_strip_padding_bottom">16dp</dimen>
+    <dimen name="channel_button_v_padding">8dp</dimen>
+
+    <dimen name="bank_row_padding">12dp</dimen>
+    <dimen name="bank_button_v_padding">14dp</dimen>
+    <dimen name="bank_button_text_size">15sp</dimen>
+
+    <dimen name="top_bar_padding">16dp</dimen>
+    <dimen name="status_text_v_padding">8dp</dimen>
+
+    <!-- Мониторный режим на планшете -->
+    <dimen name="monitor_top_bar_padding">16dp</dimen>
+    <dimen name="monitor_connect_row_padding">16dp</dimen>
+    <dimen name="monitor_buslevel_padding">16dp</dimen>
+    <dimen name="monitor_bank_row_padding">12dp</dimen>
+    <dimen name="monitor_channel_header_padding">14dp</dimen>
+    <dimen name="monitor_channel_value_margin">8dp</dimen>
+    <dimen name="monitor_channel_strip_bottom_padding">16dp</dimen>
+    <dimen name="monitor_channel_fader_top_margin">6dp</dimen>
+    <dimen name="monitor_channel_strip_width">120dp</dimen>
+    <dimen name="monitor_channel_fader_thickness">44dp</dimen>
 </resources>

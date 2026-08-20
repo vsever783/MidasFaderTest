@@ -148,6 +148,20 @@
                 android:textStyle="bold"
                 android:textColor="#ffffff" />
 
+            <!-- LINK (стерео-пара) - ПОДТВЕРЖДЕНО реальным захватом трафика
+                 (enConfigPairingState), поведение конкретно не проверялось. -->
+            <Button
+                android:id="@+id/groupDetailLink"
+                android:layout_width="match_parent"
+                android:layout_height="26dp"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
+                android:layout_marginTop="6dp"
+                android:text="LINK"
+                android:textSize="9sp"
+                android:textStyle="bold"
+                android:textColor="#ffffff" />
+
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="0dp"

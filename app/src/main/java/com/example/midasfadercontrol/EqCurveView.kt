@@ -66,6 +66,14 @@ class EqCurveView @JvmOverloads constructor(
         /** Аккуратное форматирование Гц для подписи ("84 Hz" / "1.2 kHz"). */
         fun formatHz(hz: Float): String =
             if (hz >= 1000f) "%.1f kHz".format(hz / 1000f) else "%.0f Hz".format(hz)
+
+        // Тот же диапазон, что и в самом графике (gainRangeDb в теле класса) -
+        // ±16 дБ, уточнено по фото шкалы пульта.
+        private const val eqGainRangeDb = 16f
+        fun formatEqGain(raw: Float): String {
+            val db = (raw.coerceIn(0f, 1f) - 0.5f) * 2f * eqGainRangeDb
+            return "%+.1f dB".format(db)
+        }
     }
 
     data class Band(

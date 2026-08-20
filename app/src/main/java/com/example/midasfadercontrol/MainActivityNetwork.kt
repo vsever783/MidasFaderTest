@@ -166,6 +166,7 @@ import java.net.SocketTimeoutException
                     textConnectionStatus.text = "● Connected"
                     textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
                     textStatus.text = "Connected to $host:$port, subscribing to live updates..."
+                    collapseConnectForm()
                 }
 
                 startReceiveLoop(newSocket)
@@ -644,6 +645,12 @@ import java.net.SocketTimeoutException
             paths[threshH] = Pro2Commands.auxBusCompThresholdAddress()
             paths[makeupH] = Pro2Commands.auxBusCompMakeupAddress()
 
+            // LINK - ПОДТВЕРЖДЕНО реальным захватом (в отличие от EQ/comp
+            // выше, которые в записи вообще не встретились подписанными).
+            val linkH = "/h_${sid}_ab${index}_link"
+            subs.add(linkH to Subscription(index, ParamKind.LINK))
+            paths[linkH] = Pro2Commands.auxBusPairingAddress()
+
             withContext(Dispatchers.Main) {
                 for ((handle, sub) in subs) auxBusSubscriptions[handle] = sub
             }
@@ -691,6 +698,21 @@ import java.net.SocketTimeoutException
             paths["/h_${sid}_mo${index}_comprelease"] = Pro2Commands.mainOutCompReleaseAddress()
             paths["/h_${sid}_mo${index}_compthreshold"] = Pro2Commands.mainOutCompThresholdAddress()
             paths["/h_${sid}_mo${index}_compmakeup"] = Pro2Commands.mainOutCompMakeupAddress()
+
+            // Новые параметры - ПОДТВЕРЖДЕНЫ реальным захватом трафика
+            // (all config ipad.pcapng), поведение не проверялось.
+            subs.add("/h_${sid}_mo${index}_link" to Subscription(index, ParamKind.LINK))
+            subs.add("/h_${sid}_mo${index}_presence" to Subscription(index, ParamKind.COMP_PRESENCE))
+            subs.add("/h_${sid}_mo${index}_bustrim" to Subscription(index, ParamKind.BUS_TRIM))
+            subs.add("/h_${sid}_mo${index}_compstyle" to Subscription(index, ParamKind.COMP_STYLE))
+            subs.add("/h_${sid}_mo${index}_filterbw" to Subscription(index, ParamKind.COMP_FILTER_BANDWIDTH))
+            subs.add("/h_${sid}_mo${index}_knee" to Subscription(index, ParamKind.COMP_KNEE))
+            paths["/h_${sid}_mo${index}_link"] = Pro2Commands.mainOutPairingAddress()
+            paths["/h_${sid}_mo${index}_presence"] = Pro2Commands.mainOutCompPresenceAddress()
+            paths["/h_${sid}_mo${index}_bustrim"] = Pro2Commands.mainOutBusTrimAddress()
+            paths["/h_${sid}_mo${index}_compstyle"] = Pro2Commands.mainOutCompStyleAddress()
+            paths["/h_${sid}_mo${index}_filterbw"] = Pro2Commands.mainOutCompFilterBandwidthAddress()
+            paths["/h_${sid}_mo${index}_knee"] = Pro2Commands.mainOutCompKneeAddress()
 
             withContext(Dispatchers.Main) {
                 for ((handle, sub) in subs) mainOutSubscriptions[handle] = sub

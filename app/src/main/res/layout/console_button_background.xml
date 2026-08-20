@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Плоская кнопка в стиле консоли - скруглённый прямоугольник без системной
+    тени/градиента (обычные Android-кнопки по умолчанию дают лёгкий 3D-эффект,
+    который на тёмном фоне выглядит "не в тему"). Используется через
+    android:background - тогда backgroundTint можно смело перекрашивать под
+    состояние (включено/выключено), форма остаётся неизменной.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#3a3a3c" />
+    <corners android:radius="8dp" />
+</shape>

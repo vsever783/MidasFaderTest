@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Фон "панели" в стиле реального рэкового модуля пульта - каждая
+    функциональная секция (INPUT/COMP/GATE/EQ/SENDS) визуально
+    сгруппирована в такую карточку, а не плавает на чистом чёрном фоне.
+    Тонкая обводка вместо тени - тени на чёрном фоне почти не видны и
+    выглядят "грязно", обводка чище читается на OLED-подобном чёрном.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#17171a" />
+    <corners android:radius="14dp" />
+    <stroke android:width="1dp" android:color="#2a2a2e" />
+</shape>

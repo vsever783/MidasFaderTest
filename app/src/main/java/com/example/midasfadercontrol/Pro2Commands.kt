@@ -649,6 +649,47 @@ object Pro2Commands {
     fun getMainOutCompRatio(index: Int): ByteArray = OscUtil.encode(mainOutCompRatioAddress(), listOf(index))
     fun getMainOutCompThreshold(index: Int): ByteArray = OscUtil.encode(mainOutCompThresholdAddress(), listOf(index))
 
+    // === Main Out - LINK (стерео-пара), Presence, Bus Trim, циклические
+    // режимы компрессора. ПОДТВЕРЖДЕНО реальным захватом трафика iPad
+    // (all config ipad.pcapng) - типы сообщений (enPPCSwitchMessage /
+    // enPPCRotaryMessage / enPPCIntegerMessage) настоящие, но конкретное
+    // ЗНАЧЕНИЕ, которое присылает пульт для cycle-параметров, и точный
+    // эффект LINK - не проверялись (в подписках видно только сам факт
+    // существования и тип параметра, не поведение). ===
+    fun mainOutPairingAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enConfigPairingState"
+    fun setMainOutPairingNext(index: Int): ByteArray = OscUtil.encode(mainOutPairingAddress(), listOf(index, 1))
+
+    fun mainOutCompPresenceAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enCompLimPresence"
+    fun setMainOutCompPresence(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutCompPresenceAddress(), listOf(index, level.coerceIn(0f, 1f)))
+
+    fun mainOutBusTrimAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enBusTrimLevel"
+    fun setMainOutBusTrim(index: Int, level: Float): ByteArray =
+        OscUtil.encode(mainOutBusTrimAddress(), listOf(index, level.coerceIn(0f, 1f)))
+
+    // Читаем как enPPCIntegerMessage (подтверждено подпиской), переключаем
+    // как enPPCSwitchMessage-пульс - та же логика, что уже применена для
+    // compDetectorModeCycleAddress/gateModeCycleAddress/eqShapeAddress:
+    // "прочитать" и "переключить на следующий" у пульта - разные адреса с
+    // одним и тем же именем параметра, но разным типом-префиксом.
+    fun mainOutCompStyleAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompStyle"
+    fun mainOutCompStyleCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompStyle"
+    fun setMainOutCompStyleNext(index: Int): ByteArray = OscUtil.encode(mainOutCompStyleCycleAddress(), listOf(index, 1))
+
+    fun mainOutCompFilterBandwidthAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidthCycle"
+    fun mainOutCompFilterBandwidthCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidthCycle"
+    fun setMainOutCompFilterBandwidthNext(index: Int): ByteArray =
+        OscUtil.encode(mainOutCompFilterBandwidthCycleAddress(), listOf(index, 1))
+
+    fun mainOutCompKneeAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimKneeCycle"
+    fun mainOutCompKneeCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimKneeCycle"
+    fun setMainOutCompKneeNext(index: Int): ByteArray = OscUtil.encode(mainOutCompKneeCycleAddress(), listOf(index, 1))
+
+    // === Aux-шина - LINK (стерео-пара). ПОДТВЕРЖДЕНО реальным захватом
+    // (тот же тип enPPCSwitchMessage, что и у Main Out выше). ===
+    fun auxBusPairingAddress() = "/enPPCSwitchMessage/$AUX_BUS_GROUP/enConfigPairingState"
+    fun setAuxBusPairingNext(index: Int): ByteArray = OscUtil.encode(auxBusPairingAddress(), listOf(index, 1))
+
     // === Aux-шины - EQ (6 полос) и компрессор. Та же структура, что у Main
     // Outs, но с ДРУГИМИ именами параметров - сверено с датасетом отдельно,
     // не предполагалось по аналогии. Главное отличие: gain для EQ называется

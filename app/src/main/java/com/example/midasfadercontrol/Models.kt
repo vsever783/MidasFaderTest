@@ -5,7 +5,7 @@ package com.example.midasfadercontrol
 // Перечисления и модели данных, используемые по всему приложению.
 
 // === Живая подписка на пульт (см. Pro2Commands.batchSubscribe) ===
-enum class ParamKind { FADER, MUTE, SOLO, SOLO_B, LINK, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, COMP_DET_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, EQ_SHAPE_BASS, EQ_SHAPE_TREBLE, PAN, PHANTOM, PHASE, GAIN_TRIM, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER, GATE_DET_METER, COMP_MODE, GATE_MODE }
+enum class ParamKind { FADER, MUTE, SOLO, SOLO_B, LINK, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, COMP_DET_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, EQ_SHAPE_BASS, EQ_SHAPE_TREBLE, PAN, PHANTOM, PHASE, GAIN_TRIM, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER, GATE_DET_METER, COMP_MODE, GATE_MODE, COMP_PRESENCE, BUS_TRIM, COMP_STYLE, COMP_FILTER_BANDWIDTH, COMP_KNEE }
 // Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX ШИНЫ, MASTER - мастер намеренно
 // в конце (по просьбе - обычно с ним работают реже всего).
 enum class StripMode { CHANNELS, AUX_RETURNS, AUX_BUS, VCA, MASTER, MAIN_OUTS }
@@ -129,7 +129,8 @@ data class AuxBusData(
     var name: String = "",
     var colourArgb: Int? = null,
     var soloBLocal: Boolean = false,
-    // EQ (6 полос) + компрессор + фильтры - та же структура, что и у Main
+    // LINK (стерео-пара) - ПОДТВЕРЖДЕНО реальным захватом (enConfigPairingState).
+    var linked: Boolean = false,
     // Outs (см. заметку у MainOutData) - по датасету muffeeee у aux-шин
     // ("enVirtualSubMixes") есть тот же набор. НЕ подтверждено реальным
     // захватом.
@@ -174,6 +175,16 @@ data class MainOutData(
     var fader: Float = 0f,
     var mutedLocal: Boolean = false,
     var name: String = "",
+    // LINK (стерео-пара) + новые параметры компрессора - все ПОДТВЕРЖДЕНЫ
+    // реальным захватом трафика (all config ipad.pcapng) как существующие
+    // и с правильным типом сообщения, но их фактическое поведение
+    // (значения cycle-режимов, эффект LINK) не проверялось.
+    var linked: Boolean = false,
+    var compPresence: Float = 0f,
+    var busTrim: Float = 0f,
+    var compStyle: Int = 0,
+    var compFilterBandwidth: Int = 0,
+    var compKnee: Int = 0,
     var colourArgb: Int? = null,
     // EQ - 6 полос (не 4, как у канала!) + HP/LP/notch фильтры.
     // НЕ подтверждено реальным захватом - взято из датасета

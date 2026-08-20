@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="82dp"
+    android:layout_width="@dimen/monitor_channel_strip_width"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:gravity="center_horizontal"
@@ -43,45 +43,24 @@
         ширина повёрнутого SeekBar подгоняется под реальную высоту
         программно, той же логикой, что и у обычного фейдера в инженерском
         режиме - работает и в портретной, и в альбомной ориентации одинаково.
-        Рядом - узкая полоска-метр входного сигнала канала (та же логика
-        подсветки зелёный/жёлтый/красный, что и в инженерском режиме).
     -->
-    <LinearLayout
+    <FrameLayout
+        android:id="@+id/monitorSendContainer"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:layout_marginTop="@dimen/monitor_channel_fader_top_margin"
-        android:orientation="horizontal">
+        android:layout_marginTop="@dimen/monitor_channel_fader_top_margin">
 
-        <FrameLayout
-            android:layout_width="6dp"
-            android:layout_height="match_parent"
-            android:layout_marginEnd="3dp">
-            <View
-                android:id="@+id/monitorMeterBar"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_gravity="bottom"
-                android:background="#34c759" />
-        </FrameLayout>
-
-        <FrameLayout
-            android:id="@+id/monitorSendContainer"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1">
-
-            <SeekBar
-                android:id="@+id/seekMonitorSend"
-                android:layout_width="220dp"
-                android:layout_height="32dp"
-                android:layout_gravity="center"
-                android:max="1000"
-                android:progress="0"
-                android:progressTint="#ff9f0a"
-                android:thumbTint="#ffffff"
-                android:rotation="270" />
-        </FrameLayout>
-    </LinearLayout>
+        <SeekBar
+            android:id="@+id/seekMonitorSend"
+            android:layout_width="220dp"
+            android:layout_height="@dimen/monitor_channel_fader_thickness"
+            android:layout_gravity="center"
+            android:max="1000"
+            android:progress="0"
+            android:progressTint="#ff9f0a"
+            android:thumbTint="#ffffff"
+            android:rotation="270" />
+    </FrameLayout>
 
 </LinearLayout>

@@ -178,6 +178,8 @@
                 android:id="@+id/inputBlockContent"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_margin="12dp"
+                android:background="@drawable/card_panel_background"
                 android:orientation="vertical"
                 android:gravity="center_horizontal"
                 android:padding="12dp">
@@ -205,7 +207,8 @@
                             android:text="GAIN"
                             android:textColor="#ff9f0a"
                             android:textStyle="bold"
-                            android:textSize="14sp"
+                            android:textSize="11sp"
+                            android:letterSpacing="0.12"
                             android:layout_marginBottom="12dp" />
 
                         <com.example.midasfadercontrol.RotaryKnobView
@@ -236,7 +239,8 @@
                             android:text="GAIN TRIM"
                             android:textColor="#ff9f0a"
                             android:textStyle="bold"
-                            android:textSize="14sp"
+                            android:textSize="11sp"
+                            android:letterSpacing="0.12"
                             android:layout_marginBottom="12dp" />
 
                         <com.example.midasfadercontrol.RotaryKnobView
@@ -448,6 +452,8 @@
                 android:id="@+id/compBlockContent"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_margin="12dp"
+                android:background="@drawable/card_panel_background"
                 android:orientation="vertical"
                 android:padding="12dp"
                 android:visibility="gone" />
@@ -457,6 +463,8 @@
                 android:id="@+id/eqBlockContent"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_margin="12dp"
+                android:background="@drawable/card_panel_background"
                 android:orientation="vertical"
                 android:padding="12dp"
                 android:visibility="gone" />
@@ -466,6 +474,8 @@
                 android:id="@+id/gateBlockContent"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_margin="12dp"
+                android:background="@drawable/card_panel_background"
                 android:orientation="vertical"
                 android:padding="12dp"
                 android:visibility="gone" />
