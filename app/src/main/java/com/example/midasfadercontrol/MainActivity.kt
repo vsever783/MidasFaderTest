@@ -172,6 +172,7 @@ class MainActivity : AppCompatActivity() {
         buildVcaStrips()
         buildMainOutStrips()
         buildModeButtons()
+        setupGlobalTapButton()
 
         btnConnect.setOnClickListener { connectAndSync() }
 
@@ -917,6 +918,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Глобальная кнопка TAP - задаёт темп делею (или любому другому
+     * эффекту с этой функцией) простукиванием ритма. НЕ подтверждено
+     * реальным захватом - см. заметку у Pro2Commands.globalTapAddress().
+     * Кнопка кратко подсвечивается оранжевым при каждом тапе - чисто
+     * визуальная обратная связь "я тебя услышал", без обращения к пульту
+     * за подтверждением (сам параметр глобальный, у него нет привычного
+     * push-состояния для конкретного канала, которое можно было бы читать).
+     */
+    private fun setupGlobalTapButton() {
+        val btn = findViewById<Button>(R.id.btnGlobalTap)
+        btn.backgroundTintList = null
+        btn.setBackgroundColor(Color.parseColor("#3a3a3c"))
+        btn.setOnClickListener {
+            btn.setBackgroundColor(Color.parseColor("#ff9f0a"))
+            btn.postDelayed({ btn.setBackgroundColor(Color.parseColor("#3a3a3c")) }, 120)
+            sendRawAsync(Pro2Commands.setGlobalTap())
+        }
+    }
+
     // Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX BUSES, MASTER - мастер
     // намеренно в конце, по просьбе (обычно с ним работают реже всего).
     private var currentStripMode = StripMode.CHANNELS
@@ -1239,19 +1260,25 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             ParamKind.EQ_SHAPE_BASS -> {
-                val isShelf = blob.size >= 4 &&
-                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
-                ConnectionHolder.channelData[sub.channel].eqBassShelf = isShelf
+                val mode = if (blob.size >= 4)
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int.coerceIn(0, 3)
+                else 0
+                ConnectionHolder.channelData[sub.channel].eqBassShapeMode = mode
                 if (openDetailChannel == sub.channel) {
-                    detailEqViews?.bassShapeButton?.text = if (isShelf) "SHELF" else "BELL"
+                    detailEqViews?.bassShapeButton?.text = eqShapeModeLabel(mode)
+                    detailEqViews?.graphView?.bands?.getOrNull(0)?.shapeMode = mode
+                    detailEqViews?.graphView?.invalidate()
                 }
             }
             ParamKind.EQ_SHAPE_TREBLE -> {
-                val isShelf = blob.size >= 4 &&
-                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
-                ConnectionHolder.channelData[sub.channel].eqTrebleShelf = isShelf
+                val mode = if (blob.size >= 4)
+                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int.coerceIn(0, 3)
+                else 0
+                ConnectionHolder.channelData[sub.channel].eqTrebleShapeMode = mode
                 if (openDetailChannel == sub.channel) {
-                    detailEqViews?.trebleShapeButton?.text = if (isShelf) "SHELF" else "BELL"
+                    detailEqViews?.trebleShapeButton?.text = eqShapeModeLabel(mode)
+                    detailEqViews?.graphView?.bands?.getOrNull(3)?.shapeMode = mode
+                    detailEqViews?.graphView?.invalidate()
                 }
             }
             ParamKind.PAN -> {
@@ -2028,7 +2055,8 @@ class MainActivity : AppCompatActivity() {
         }
         if (kind == ParamKind.EQ_FREQ) views.graphView.bands.getOrNull(bandIndex)?.freq = level
         if (kind == ParamKind.EQ_GAIN) views.graphView.bands.getOrNull(bandIndex)?.gain = level
-        if (kind == ParamKind.EQ_FREQ || kind == ParamKind.EQ_GAIN) views.graphView.invalidate()
+        if (kind == ParamKind.EQ_WIDTH) views.graphView.bands.getOrNull(bandIndex)?.width = level
+        if (kind == ParamKind.EQ_FREQ || kind == ParamKind.EQ_GAIN || kind == ParamKind.EQ_WIDTH) views.graphView.invalidate()
     }
 
     private fun updateMasterFaderUi(masterIndex: Int, level: Float) {
@@ -2634,6 +2662,22 @@ class MainActivity : AppCompatActivity() {
         showGroupTab(view, "COMP")
 
         subscribeMainOutExtras(index)
+    }
+
+    /**
+     * Подписи 4 режимов формы BASS/TREBLE - подтверждено пользователем
+     * вручную на реальном пульте (см. "Настройки канала.txt"): кнопка
+     * SHAPE циклически переключает parametric -> bright -> classic ->
+     * soft -> parametric. Порядок 0..3, в котором пульт присылает индексы,
+     * НЕ подтверждён захватом (сама подписка на этот параметр случилась до
+     * начала записи) - если после теста окажется, что подписи не совпадают
+     * с реальным порядком, тут достаточно поменять местами строки.
+     */
+    private fun eqShapeModeLabel(mode: Int): String = when (mode) {
+        1 -> "BRIGHT"
+        2 -> "CLASSIC"
+        3 -> "SOFT"
+        else -> "PARAMETRIC"
     }
 
     private fun openChannelDetail(channel: Int) {
@@ -3312,7 +3356,12 @@ class MainActivity : AppCompatActivity() {
         // --- Интерактивный график - точки можно таскать пальцем ---
         val graph = EqCurveView(this)
         for (i in 0 until 4) {
-            graph.bands[i] = EqCurveView.Band(data.eqFreq[i], data.eqGain[i], data.eqBandActiveLocal[i], bandColours[i])
+            graph.bands[i] = EqCurveView.Band(data.eqFreq[i], data.eqGain[i], data.eqBandActiveLocal[i], bandColours[i], data.eqWidth[i])
+            graph.bands[i].shapeMode = when (i) {
+                0 -> data.eqBassShapeMode
+                3 -> data.eqTrebleShapeMode
+                else -> 0
+            }
         }
         graph.hpFreq = data.hpFilterFreq
         graph.hpOn = data.hpFilterInLocal
@@ -3437,12 +3486,16 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             header.addView(bandLabel)
-            // Форма (bell/shelf) - ТОЛЬКО у BASS и TREBLE. ПОДТВЕРЖДЕНО
-            // реальным захватом трафика iPad.
+            // Форма BASS/TREBLE - цикл из 4 режимов (PARAMETRIC/BRIGHT/
+            // CLASSIC/SOFT), не простой bell/shelf-переключатель - см.
+            // заметку у setEqShapeNext в Pro2Commands.kt. Адрес
+            // подтверждён реальным трафиком iPad, то, что это именно
+            // 4-значный цикл (а не boolean) - подтверждено вами вручную на
+            // пульте, но не отдельным захватом.
             if (bandIndex == 0 || bandIndex == 3) {
-                val isShelfInitial = if (bandIndex == 0) data.eqBassShelf else data.eqTrebleShelf
+                val initialMode = if (bandIndex == 0) data.eqBassShapeMode else data.eqTrebleShapeMode
                 val shapeButton = Button(this).apply {
-                    text = if (isShelfInitial) "SHELF" else "BELL"
+                    text = eqShapeModeLabel(initialMode)
                     textSize = 10f
                     minHeight = 0
                     minimumHeight = 0
@@ -3452,10 +3505,15 @@ class MainActivity : AppCompatActivity() {
                     setBackgroundColor(Color.parseColor("#3a3a3c"))
                     setOnClickListener {
                         val d = ConnectionHolder.channelData[channel]
-                        val newState = if (bandIndex == 0) !d.eqBassShelf else !d.eqTrebleShelf
-                        if (bandIndex == 0) d.eqBassShelf = newState else d.eqTrebleShelf = newState
-                        text = if (newState) "SHELF" else "BELL"
-                        sendRawAsync(Pro2Commands.setEqShape(channel, band, newState))
+                        // Локально оптимистично прокручиваем на следующий
+                        // режим по кругу - реальное состояние всё равно
+                        // подтвердит push с пульта следующим сообщением.
+                        val newMode = ((if (bandIndex == 0) d.eqBassShapeMode else d.eqTrebleShapeMode) + 1) % 4
+                        if (bandIndex == 0) d.eqBassShapeMode = newMode else d.eqTrebleShapeMode = newMode
+                        text = eqShapeModeLabel(newMode)
+                        graph.bands[bandIndex].shapeMode = newMode
+                        graph.invalidate()
+                        sendRawAsync(Pro2Commands.setEqShapeNext(channel, band))
                     }
                 }
                 val shapeParams = android.widget.LinearLayout.LayoutParams(
@@ -3515,6 +3573,7 @@ class MainActivity : AppCompatActivity() {
                     persistEq(channel, bandIndex, kind, v)
                     if (kind == ParamKind.EQ_FREQ) { graph.bands[bandIndex].freq = v; graph.invalidate() }
                     if (kind == ParamKind.EQ_GAIN) { graph.bands[bandIndex].gain = v; graph.invalidate() }
+                    if (kind == ParamKind.EQ_WIDTH) { graph.bands[bandIndex].width = v; graph.invalidate() }
                     val now = System.currentTimeMillis()
                     if (now - lastSend >= minSendIntervalMs) {
                         lastSend = now

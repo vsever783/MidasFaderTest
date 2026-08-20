@@ -66,8 +66,12 @@ data class ChannelData(
     var gateMode: Int = -1,
     var soloBLocal: Boolean = false,
     var linkedLocal: Boolean = false,
-    var eqBassShelf: Boolean = false,
-    var eqTrebleShelf: Boolean = false,
+    // Форма BASS/TREBLE - 4 режима по кругу (0=PARAMETRIC/bell,
+    // 1=BRIGHT, 2=CLASSIC, 3=SOFT - три разных варианта shelf).
+    // Раньше считали простым bell/shelf-булевым, оказалось не так -
+    // подтверждено пользователем вручную на реальном пульте.
+    var eqBassShapeMode: Int = 0,
+    var eqTrebleShapeMode: Int = 0,
     // HP/LP фильтры и задержка входа - ПОДТВЕРЖДЕНО реальным захватом.
     var hpFilterInLocal: Boolean = false,
     var hpFilterFreq: Float = 0f,

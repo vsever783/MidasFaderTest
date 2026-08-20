@@ -39,7 +39,9 @@ class EqCurveView @JvmOverloads constructor(
         private val bandHzRangeStatic = mapOf(
             BandId.BASS to (16f to 400f),
             BandId.LOW_MID to (80f to 2000f),
-            BandId.MID_HIGH to (350f to 8000f),
+            // Уточнено по новому фото экрана пульта (hi mid): было 350,
+            // на шкале реально 320.
+            BandId.MID_HIGH to (320f to 8000f),
             BandId.TREBLE to (1000f to 25000f)
         )
 
@@ -70,13 +72,23 @@ class EqCurveView @JvmOverloads constructor(
         var freq: Float,      // 0..1, сырое значение ручки (в пределах СВОЕГО поддиапазона - см. bandHzRange)
         var gain: Float,      // 0..1, сырое значение ручки (0.5 = условный центр/0дБ)
         var active: Boolean,
-        val color: Int
+        val color: Int,
+        // ШИРИНА (добротность) полосы - раньше вообще не участвовала в
+        // расчёте кривой (использовалась захардкоженная константа), из-за
+        // чего ручка WIDTH визуально ни на что не влияла. Теперь влияет -
+        // см. widthFactor в onDraw. 0..1 сырое значение ручки.
+        var width: Float = 0.5f,
+        // Форма полосы - 0=PARAMETRIC(bell), 1=BRIGHT, 2=CLASSIC, 3=SOFT
+        // (три разных варианта shelf). Имеет смысл только для BASS и
+        // TREBLE (у пульта только у них есть кнопка SHAPE) - у
+        // LOW_MID/MID_HIGH всегда bell (0), это поле для них не используется.
+        var shapeMode: Int = 0
     )
 
     private val bandHzRange = mapOf(
         BandId.BASS to (16f to 400f),
         BandId.LOW_MID to (80f to 2000f),
-        BandId.MID_HIGH to (350f to 8000f),
+        BandId.MID_HIGH to (320f to 8000f),
         BandId.TREBLE to (1000f to 25000f)
     )
     private val bandOrder = listOf(BandId.BASS, BandId.LOW_MID, BandId.MID_HIGH, BandId.TREBLE)
@@ -89,9 +101,14 @@ class EqCurveView @JvmOverloads constructor(
 
     var onNodeDragged: ((Int, Float, Float) -> Unit)? = null
 
-    private val gainRangeDb = 15f
+    private val gainRangeDb = 16f // уточнено по фото шкалы пульта (-16..0..+16)
     private val axisMinHz = 20f
     private val axisMaxHz = 20000f
+    // Сколько "нормализованных" единиц X (0..1 по всей логарифмической оси
+    // 20Гц-20кГц) занимает ровно одна октава - нужно, чтобы перевести
+    // WIDTH (по шкале пульта 0.1-3.0, судя по всему что-то вроде октав) в
+    // ширину гауссианы кривой в тех же координатах, что и bandXNorm ниже.
+    private val octaveNorm = (ln(2f) / (ln(axisMaxHz) - ln(axisMinHz)))
 
     private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -126,6 +143,10 @@ class EqCurveView @JvmOverloads constructor(
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = Color.parseColor("#111113")
+    }
+    private val cutZonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.parseColor("#33888888") // серая полупрозрачная - зона, которую режет HPF/LPF
     }
 
     private val freqLabels = listOf(20f to "20", 100f to "100", 1000f to "1k", 10000f to "10k", 20000f to "20k")
@@ -210,16 +231,72 @@ class EqCurveView @JvmOverloads constructor(
                 val bandId = bandOrder[i]
                 val bandDb = (band.gain - 0.5f) * 2f * gainRangeDb
                 val bandXNorm = hzToXNorm(rawToHz(band.freq, bandId))
-                val dist = abs(tx - bandXNorm)
-                val widthFactor = 0.10f
-                val influence = Math.E.toFloat().pow(-(dist * dist) / (2 * widthFactor * widthFactor))
+                // РАНЬШЕ здесь была захардкоженная константа 0.10f - ручка
+                // WIDTH визуально ни на что не влияла, хотя число под ней
+                // менялось. Теперь реальная ширина полосы (0.1-3.0,
+                // подтверждённый диапазон) определяет форму колокола:
+                // больше WIDTH -> шире и положе, меньше -> уже́ и острее.
+                val actualWidth = rawToWidthPublic(band.width)
+                val widthFactor = (actualWidth * octaveNorm).coerceIn(0.008f, 0.5f)
+                // BELL (mode 0/PARAMETRIC) - симметричный колокол, как
+                // раньше. SHELF (mode 1/2/3 - BRIGHT/CLASSIC/SOFT) - "полка"
+                // с разной крутизной перехода: BRIGHT самая резкая, SOFT -
+                // самая плавная, CLASSIC - между ними. Реальная акустическая
+                // разница между тремя shelf-вариантами пультом не
+                // документирована - это условное визуальное приближение,
+                // чтобы хотя бы было заметно, что режимы разные, а не
+                // лабораторно точное воспроизведение.
+                val isShelf = band.shapeMode != 0 && (bandId == BandId.BASS || bandId == BandId.TREBLE)
+                val shelfSteepness = when (band.shapeMode) {
+                    1 -> widthFactor * 0.5f  // BRIGHT - самый резкий переход
+                    2 -> widthFactor * 1.0f  // CLASSIC - средний
+                    3 -> widthFactor * 1.8f  // SOFT - самый плавный
+                    else -> widthFactor
+                }
+                val influence = if (isShelf && bandId == BandId.BASS) {
+                    1f / (1f + Math.E.toFloat().pow((tx - bandXNorm) / shelfSteepness))
+                } else if (isShelf && bandId == BandId.TREBLE) {
+                    1f / (1f + Math.E.toFloat().pow(-(tx - bandXNorm) / shelfSteepness))
+                } else {
+                    val dist = abs(tx - bandXNorm)
+                    Math.E.toFloat().pow(-(dist * dist) / (2 * widthFactor * widthFactor))
+                }
                 totalDb += bandDb * influence
+            }
+            // HP/LP - раньше на графике были только перетаскиваемые точки,
+            // сам спад никак не показывался. Теперь фильтр реально "режет"
+            // кривую: у HPF - всё ниже частоты среза, у LPF - всё выше.
+            // Крутизна спада (steepness) и глубина среза (filterFloorDb) -
+            // условные, для наглядности графика, а не лабораторно точные
+            // (у самих фильтров на пульте регулировки крутизны нет).
+            val steepness = 0.015f
+            val filterFloorDb = -60f
+            if (hpOn) {
+                val passAbove = 1f / (1f + Math.E.toFloat().pow(-(tx - hpFreq) / steepness))
+                totalDb += filterFloorDb * (1f - passAbove)
+            }
+            if (lpOn) {
+                val passBelow = 1f / (1f + Math.E.toFloat().pow((tx - lpFreq) / steepness))
+                totalDb += filterFloorDb * (1f - passBelow)
             }
             val x = plotLeft + tx * (plotRight - plotLeft)
             val y = gainToY((totalDb / (2 * gainRangeDb) + 0.5f).coerceIn(0f, 1f))
             if (first) { path.moveTo(x, y); first = false } else path.lineTo(x, y)
             tx += 0.01f
         }
+
+        // Закрашенная зона среза - серая полупрозрачная область там, где
+        // HPF/LPF реально режут сигнал, для наглядности даже без
+        // разглядывания самой кривой.
+        if (hpOn) {
+            val hpX = freqToX(hpFreq)
+            canvas.drawRect(plotLeft, plotTop, hpX, plotBottom, cutZonePaint)
+        }
+        if (lpOn) {
+            val lpX = freqToX(lpFreq)
+            canvas.drawRect(lpX, plotTop, plotRight, plotBottom, cutZonePaint)
+        }
+
         val fillPath = Path(path)
         fillPath.lineTo(plotRight, gainToY(0.5f))
         fillPath.lineTo(plotLeft, gainToY(0.5f))

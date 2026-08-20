@@ -366,8 +366,21 @@ object Pro2Commands {
     fun setEqWidth(channelIndex: Int, band: EqBand, level: Float): ByteArray =
         OscUtil.encode(eqWidthAddress(band), listOf(channelIndex, level.coerceIn(0f, 1f)))
 
-    fun setEqShape(channelIndex: Int, band: EqBand, isShelf: Boolean): ByteArray =
-        OscUtil.encode(eqShapeAddress(band), listOf(channelIndex, if (isShelf) 1 else 0))
+    /**
+     * ПЕРЕСМОТРЕНО: раньше считали это простым bell/shelf-переключателем
+     * (0/1), но реальный пульт при нажатии этой кнопки циклически
+     * переключает между 4 режимами - "parametric" (это и есть bell),
+     * "bright", "classic", "soft" (три разных варианта shelf) -
+     * подтверждено пользователем вручную на реальном пульте (см. заметку
+     * "Настройки канала.txt" в переписке). Значит это TOGGLE/CYCLE-тип,
+     * как compDetectorModeCycleAddress/gateModeCycleAddress - сам факт
+     * пакета переключает на следующий режим, отправляемое значение не
+     * важно. Адрес (eqShapeAddress) при этом остаётся тем же самым, что
+     * было независимо подтверждено раньше реальным трафиком iPad - под
+     * вопросом только то, что это boolean, а не 4-значный цикл.
+     */
+    fun setEqShapeNext(channelIndex: Int, band: EqBand): ByteArray =
+        OscUtil.encode(eqShapeAddress(band), listOf(channelIndex, 1))
 
     fun getEqIn(channelIndex: Int): ByteArray =
         OscUtil.encode(eqInAddress(), listOf(channelIndex))
@@ -728,4 +741,15 @@ object Pro2Commands {
     // этого пульт, похоже, отключает подписку по таймауту через какое-то
     // время после последнего /renew, и push-обновления перестают приходить.
     fun renew(): ByteArray = OscUtil.encode("/renew", emptyList())
+
+    // === Global Tap - задаёт темп делею (или любому другому эффекту с
+    // этой функцией) простукиванием ритма. НЕ подтверждено реальным
+    // захватом - адрес из датасета muffeeee (enGlobals/enGlobalTapSwitch),
+    // тип enPPCSwitchMessage - по уже подтверждённой закономерности
+    // (mute/phantom/gate и т.д.) это toggle/pulse-параметр: физическая
+    // кнопка простукивания темпа и так по своей природе работает как серия
+    // отдельных нажатий, а не как удержание состояния, так что шлём "1"
+    // при каждом тапе. Глобальный параметр - индекса канала/группы нет. ===
+    fun globalTapAddress() = "/enPPCSwitchMessage/enGlobals/enGlobalTapSwitch"
+    fun setGlobalTap(): ByteArray = OscUtil.encode(globalTapAddress(), listOf(1))
 }

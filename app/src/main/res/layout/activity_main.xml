@@ -109,20 +109,43 @@
         android:textColor="#8e8e93"
         android:textSize="11sp" />
 
-    <!-- Переключатель режима: КАНАЛЫ / MASTER / AUX (VCA - позже) -->
-    <HorizontalScrollView
+    <!-- Переключатель режима: КАНАЛЫ / MASTER / AUX (VCA - позже) + глобальная
+         кнопка TAP (задаёт темп делею/эффектам с этой функцией) - всегда
+         видна, не часть прокручиваемых вкладок режима. -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:scrollbars="none"
+        android:orientation="horizontal"
         android:background="#1c1c1e">
 
-        <LinearLayout
-            android:id="@+id/modeButtonsRow"
+        <HorizontalScrollView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/modeButtonsRow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:padding="@dimen/bank_row_padding" />
+        </HorizontalScrollView>
+
+        <Button
+            android:id="@+id/btnGlobalTap"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:padding="@dimen/bank_row_padding" />
-    </HorizontalScrollView>
+            android:layout_marginEnd="8dp"
+            android:layout_gravity="center_vertical"
+            android:minWidth="0dp"
+            android:paddingStart="18dp"
+            android:paddingEnd="18dp"
+            android:text="TAP"
+            android:textStyle="bold"
+            android:textColor="#ffffff"
+            android:backgroundTint="#3a3a3c" />
+    </LinearLayout>
 
     <!-- Кнопки переключения банков каналов (по 8 за раз, как в Mixing Station) -
          актуальны только в режиме КАНАЛЫ, скрываются в MASTER/AUX. -->
