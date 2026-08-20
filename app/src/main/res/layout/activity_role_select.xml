@@ -14,6 +14,7 @@
         android:text="MIDAS"
         android:textColor="#ff9f0a"
         android:textStyle="bold"
+        android:letterSpacing="0.15"
         android:textSize="36sp" />
 
     <TextView
@@ -21,6 +22,7 @@
         android:layout_height="wrap_content"
         android:text="Select mode"
         android:textColor="#8e8e93"
+        android:letterSpacing="0.06"
         android:textSize="14sp"
         android:layout_marginBottom="48dp" />
 
@@ -28,8 +30,10 @@
         android:id="@+id/btnRoleEngineer"
         android:layout_width="match_parent"
         android:layout_height="72dp"
+        android:background="@drawable/big_action_button_background"
         android:text="ENGINEER"
         android:textSize="16sp"
+        android:letterSpacing="0.08"
         android:textStyle="bold"
         android:textColor="#ffffff"
         android:backgroundTint="#ff9f0a"
@@ -48,8 +52,10 @@
         android:id="@+id/btnRoleMonitor"
         android:layout_width="match_parent"
         android:layout_height="72dp"
+        android:background="@drawable/big_action_button_background"
         android:text="MUSICIAN (MONITOR)"
         android:textSize="16sp"
+        android:letterSpacing="0.08"
         android:textStyle="bold"
         android:textColor="#ffffff"
         android:backgroundTint="#3a3a3c" />

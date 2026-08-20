@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Крупная кнопка выбора роли - более заметное скругление, чем у обычных
+     консольных кнопок (console_button_background), под стать своему размеру. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#3a3a3c" />
+    <corners android:radius="16dp" />
+</shape>

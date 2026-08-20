@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Фон текстовых полей ввода (IP/Port) - скруглённый прямоугольник вместо
+     стандартной Android-подчёркнутой линии, единообразно с остальными
+     элементами управления в стиле консоли. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#2c2c2e" />
+    <corners android:radius="6dp" />
+</shape>

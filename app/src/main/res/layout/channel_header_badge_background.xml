@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Бейдж с именем канала вверху полосы - скруглены только верхние углы
+    (совпадают с закруглением самой карточки-полосы), нижние прямые, чтобы
+    бейдж плавно "переходил" в тело полосы, а не выглядел отдельным
+    островком.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#2c2c2e" />
+    <corners
+        android:topLeftRadius="10dp"
+        android:topRightRadius="10dp"
+        android:bottomLeftRadius="0dp"
+        android:bottomRightRadius="0dp" />
+</shape>

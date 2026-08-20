@@ -101,6 +101,8 @@
                     android:id="@+id/groupCompBlockContent"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_margin="12dp"
+                    android:background="@drawable/card_panel_background"
                     android:orientation="vertical"
                     android:padding="12dp"
                     android:visibility="gone" />
@@ -109,6 +111,8 @@
                     android:id="@+id/groupEqBlockContent"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_margin="12dp"
+                    android:background="@drawable/card_panel_background"
                     android:orientation="vertical"
                     android:padding="12dp"
                     android:visibility="gone" />

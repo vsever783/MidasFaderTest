@@ -1555,7 +1555,7 @@ class MainActivity : AppCompatActivity() {
                     val a = blob[3].toInt() and 0xFF
                     val argb = (a shl 24) or (r shl 16) or (g shl 8) or b
                     ConnectionHolder.auxReturnData.getOrNull(sub.channel)?.colourArgb = argb
-                    auxStrips.getOrNull(sub.channel)?.headerView?.setBackgroundColor(argb)
+                    auxStrips.getOrNull(sub.channel)?.headerView?.backgroundTintList = android.content.res.ColorStateList.valueOf(argb)
                 }
             }
             else -> {}
@@ -1627,7 +1627,7 @@ class MainActivity : AppCompatActivity() {
                     val a = blob[3].toInt() and 0xFF
                     val argb = (a shl 24) or (r shl 16) or (g shl 8) or b
                     ConnectionHolder.auxBusData.getOrNull(sub.channel)?.colourArgb = argb
-                    auxBusStrips.getOrNull(sub.channel)?.headerView?.setBackgroundColor(argb)
+                    auxBusStrips.getOrNull(sub.channel)?.headerView?.backgroundTintList = android.content.res.ColorStateList.valueOf(argb)
                 }
             }
             ParamKind.LINK -> {
@@ -1705,7 +1705,7 @@ class MainActivity : AppCompatActivity() {
                     val a = blob[3].toInt() and 0xFF
                     val argb = (a shl 24) or (r shl 16) or (g shl 8) or b
                     ConnectionHolder.vcaData.getOrNull(sub.channel)?.colourArgb = argb
-                    vcaStrips.getOrNull(sub.channel)?.headerView?.setBackgroundColor(argb)
+                    vcaStrips.getOrNull(sub.channel)?.headerView?.backgroundTintList = android.content.res.ColorStateList.valueOf(argb)
                 }
             }
             else -> {}
@@ -1784,7 +1784,7 @@ class MainActivity : AppCompatActivity() {
                     val a = blob[3].toInt() and 0xFF
                     val argb = (a shl 24) or (r shl 16) or (g shl 8) or b
                     ConnectionHolder.mainOutData.getOrNull(sub.channel)?.colourArgb = argb
-                    mainOutStrips.getOrNull(sub.channel)?.headerView?.setBackgroundColor(argb)
+                    mainOutStrips.getOrNull(sub.channel)?.headerView?.backgroundTintList = android.content.res.ColorStateList.valueOf(argb)
                 }
             }
             ParamKind.METER -> {
@@ -1874,7 +1874,12 @@ class MainActivity : AppCompatActivity() {
     private fun updateColourUi(channel: Int, argbColor: Int) {
         ConnectionHolder.channelData[channel].colourArgb = argbColor
         val ui = channels.getOrNull(channel) ?: return
-        ui.headerView.setBackgroundColor(argbColor)
+        // backgroundTintList красит ПОВЕРХ уже назначенного drawable
+        // (channel_header_badge_background - скруглённые верхние углы),
+        // а не заменяет его целиком, как делал бы setBackgroundColor -
+        // иначе цвет канала с пульта стирал бы скругление при каждом
+        // обновлении.
+        ui.headerView.backgroundTintList = android.content.res.ColorStateList.valueOf(argbColor)
 
         // Чёрный или белый текст имени канала - в зависимости от яркости фона,
         // чтобы имя оставалось читаемым на любом цвете (светлый фон -> чёрный
@@ -2335,7 +2340,8 @@ class MainActivity : AppCompatActivity() {
             text = "COMPRESSOR"
             setTextColor(accent)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            textSize = 16f
+            textSize = 13f
+            letterSpacing = 0.10f
         }
         container.addView(title, android.widget.LinearLayout.LayoutParams(
             android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
@@ -2438,7 +2444,8 @@ class MainActivity : AppCompatActivity() {
             text = "EQ - 6 ПОЛОС"
             setTextColor(accent)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            textSize = 16f
+            textSize = 13f
+            letterSpacing = 0.08f
         }
         container.addView(title, android.widget.LinearLayout.LayoutParams(
             android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
@@ -2489,7 +2496,8 @@ class MainActivity : AppCompatActivity() {
                 text = "BAND ${band + 1}"
                 setTextColor(Color.parseColor("#ffffff"))
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
-                textSize = 12f
+                textSize = 11f
+                letterSpacing = 0.08f
                 setPadding(0, if (band == 0) 0 else 12, 0, 4)
             })
             knobRow(
@@ -2506,7 +2514,8 @@ class MainActivity : AppCompatActivity() {
             text = "ФИЛЬТРЫ"
             setTextColor(Color.parseColor("#ffffff"))
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-            textSize = 12f
+            textSize = 11f
+            letterSpacing = 0.08f
             setPadding(0, 16, 0, 4)
         })
         // HP/LP/notch пока не подписаны на push (см. subscribeAuxBusExtras/

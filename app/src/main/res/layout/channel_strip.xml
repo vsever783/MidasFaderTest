@@ -4,7 +4,7 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:gravity="center_horizontal"
-    android:background="#151517"
+    android:background="@drawable/channel_strip_card_background"
     android:paddingTop="0dp"
     android:paddingBottom="@dimen/channel_strip_padding_bottom"
     android:layout_margin="3dp">
@@ -16,7 +16,7 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:gravity="center_horizontal"
-        android:background="#2c2c2e"
+        android:background="@drawable/channel_header_badge_background"
         android:paddingTop="@dimen/channel_header_padding"
         android:paddingBottom="@dimen/channel_header_padding">
 
