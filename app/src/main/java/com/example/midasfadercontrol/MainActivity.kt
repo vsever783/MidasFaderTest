@@ -281,13 +281,15 @@ class MainActivity : AppCompatActivity() {
             val btn = Button(this)
             btn.text = if (data.name.isNotBlank()) "BUS ${b + 1} — ${data.name}" else "BUS ${b + 1}"
             btn.setTextColor(Color.parseColor("#ffffff"))
+            btn.textSize = 15f
+            btn.setPadding(24, 20, 24, 20)
+            btn.setBackgroundResource(R.drawable.card_panel_background)
             btn.backgroundTintList = null
-            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
             val params = android.widget.LinearLayout.LayoutParams(
                 android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
             )
-            params.bottomMargin = 8
+            params.bottomMargin = 10
             btn.layoutParams = params
             btn.setOnClickListener { openMonitorBus(b) }
             container.addView(btn)
@@ -360,6 +362,7 @@ class MainActivity : AppCompatActivity() {
             val btn = Button(this)
             btn.text = "${start + 1}-$end"
             btn.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, resources.getDimension(R.dimen.bank_button_text_size))
+            btn.setBackgroundResource(R.drawable.console_button_background)
             btn.backgroundTintList = null
             btn.minHeight = 0
             val vPad = resources.getDimensionPixelSize(R.dimen.bank_button_v_padding)
@@ -410,7 +413,8 @@ class MainActivity : AppCompatActivity() {
             val chData = ConnectionHolder.channelData[i]
             label.text = if (chData.name.isNotBlank()) chData.name else "CH ${i + 1}"
             chData.colourArgb?.let {
-                strip.findViewById<android.view.View>(R.id.monitorChannelHeader).setBackgroundColor(it)
+                strip.findViewById<android.view.View>(R.id.monitorChannelHeader).backgroundTintList =
+                    android.content.res.ColorStateList.valueOf(it)
             }
             val level = chData.auxSends.getOrElse(bus) { 0f }
             seek.value = level
@@ -472,6 +476,7 @@ class MainActivity : AppCompatActivity() {
             val labelView = strip.findViewById<TextView>(R.id.textChannelLabel)
             val levelValueText = strip.findViewById<TextView>(R.id.textLevelValue)
             val fader = strip.findViewById<FaderView>(R.id.seekFader)
+            fader.showScale = resources.getBoolean(R.bool.show_fader_scale)
             val muteButton = strip.findViewById<Button>(R.id.btnMute)
             val soloButton = strip.findViewById<ToggleButton>(R.id.btnSolo)
             val headerView = strip.findViewById<android.view.View>(R.id.channelHeader)
@@ -594,6 +599,7 @@ class MainActivity : AppCompatActivity() {
             val btn = Button(this)
             btn.text = "${start + 1}-$end"
             btn.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, resources.getDimension(R.dimen.bank_button_text_size))
+            btn.setBackgroundResource(R.drawable.console_button_background)
             btn.backgroundTintList = null
             btn.stateListAnimator = null
             // Material-стиль кнопки по умолчанию навязывает довольно большую
@@ -672,6 +678,7 @@ class MainActivity : AppCompatActivity() {
 
         val labelView = strip.findViewById<TextView>(R.id.textChannelLabel)
         val fader = strip.findViewById<FaderView>(R.id.seekFader)
+        fader.showScale = resources.getBoolean(R.bool.show_fader_scale)
         val levelText = strip.findViewById<TextView>(R.id.textLevelValue)
         val muteButton = strip.findViewById<Button>(R.id.btnMute)
         val soloButton = strip.findViewById<ToggleButton>(R.id.btnSolo)
@@ -901,6 +908,7 @@ class MainActivity : AppCompatActivity() {
             val btn = Button(this)
             btn.text = text
             btn.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, resources.getDimension(R.dimen.bank_button_text_size))
+            btn.setBackgroundResource(R.drawable.console_button_background)
             btn.backgroundTintList = null
             btn.stateListAnimator = null
             btn.minHeight = 0

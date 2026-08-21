@@ -4,7 +4,8 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:gravity="center_horizontal"
-    android:background="#111113"
+    android:background="@drawable/channel_strip_card_background"
+    android:layout_margin="3dp"
     android:paddingBottom="@dimen/monitor_channel_strip_bottom_padding">
 
     <LinearLayout
@@ -13,7 +14,7 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:gravity="center_horizontal"
-        android:background="#2c2c2e"
+        android:background="@drawable/channel_header_badge_background"
         android:paddingTop="@dimen/monitor_channel_header_padding"
         android:paddingBottom="@dimen/monitor_channel_header_padding">
 
