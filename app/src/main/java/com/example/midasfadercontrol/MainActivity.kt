@@ -97,7 +97,7 @@ class MainActivity : AppCompatActivity() {
         val rootView: android.view.View,
         val labelView: TextView,
         val levelValueText: TextView,
-        val fader: SeekBar,
+        val fader: FaderView,
         val muteButton: Button,
         val soloButton: ToggleButton,
         val headerView: android.view.View,
@@ -497,8 +497,7 @@ class MainActivity : AppCompatActivity() {
 
             val labelView = strip.findViewById<TextView>(R.id.textChannelLabel)
             val levelValueText = strip.findViewById<TextView>(R.id.textLevelValue)
-            val fader = strip.findViewById<SeekBar>(R.id.seekFader)
-            val faderContainer = strip.findViewById<android.widget.FrameLayout>(R.id.faderContainer)
+            val fader = strip.findViewById<FaderView>(R.id.seekFader)
             val muteButton = strip.findViewById<Button>(R.id.btnMute)
             val soloButton = strip.findViewById<ToggleButton>(R.id.btnSolo)
             val headerView = strip.findViewById<android.view.View>(R.id.channelHeader)
@@ -519,60 +518,32 @@ class MainActivity : AppCompatActivity() {
             muteButton.setBackgroundColor(Color.parseColor("#3a3a3c"))
             soloButton.setBackgroundColor(Color.parseColor("#3a3a3c"))
 
-            // ВАЖНО ДЛЯ АДАПТИВНОСТИ: fader повёрнут на 270°, поэтому его
-            // ВИЗУАЛЬНАЯ высота на экране на самом деле берётся из его
-            // layout_width (ширина ДО поворота). faderContainer теперь
-            // резиновый (layout_weight=1) и подстраивается под реальную
-            // высоту экрана конкретного телефона/планшета - а раз так,
-            // нужно один раз измерить, сколько места он реально получил
-            // на этом экране, и подставить это значение как ширину SeekBar.
-            // Без этого шага сам SeekBar остался бы жёстко на 220dp и либо
-            // вылезал за пределы контейнера (обрезка), либо не дотягивался
-            // до реального размера контейнера (пустое место).
-            faderContainer.viewTreeObserver.addOnGlobalLayoutListener(
-                object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
-                    override fun onGlobalLayout() {
-                        val measuredHeight = faderContainer.height
-                        if (measuredHeight > 0) {
-                            val params = fader.layoutParams
-                            if (params.width != measuredHeight) {
-                                params.width = measuredHeight
-                                fader.layoutParams = params
-                            }
-                            faderContainer.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                        }
-                    }
-                }
-            )
+            // FaderView рисует себя сам в обычных (не повёрнутых) координатах -
+            // старый трюк с измерением контейнера через viewTreeObserver и
+            // подгонкой ширины повёрнутого SeekBar больше не нужен вообще.
 
             labelView.text = "CH $displayedNumber"
 
             val ui = ChannelUi(strip, labelView, levelValueText, fader, muteButton, soloButton, headerView, meterBar)
             channels.add(ui)
 
-            fader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val level = progress / 1000f
-                    levelValueText.text = formatFaderDb(level)
-                    if (!fromUser || ui.suppressEvents) return
-                    ConnectionHolder.channelData[i].fader = level
-                    val now = System.currentTimeMillis()
-                    if (now - ui.lastFaderSendTime >= minSendIntervalMs) {
-                        ui.lastFaderSendTime = now
-                        sendFader(i, level)
-                    }
-                }
-                override fun onStartTrackingTouch(sb: SeekBar?) {
-                    ui.isDragging = true
-                }
-                override fun onStopTrackingTouch(sb: SeekBar?) {
-                    ui.isDragging = false
-                    if (ui.suppressEvents) return
-                    val level = (sb?.progress ?: 0) / 1000f
-                    ConnectionHolder.channelData[i].fader = level
+            fader.onDragStarted = { ui.isDragging = true }
+            fader.onValueChanged = onValueChanged@{ level ->
+                levelValueText.text = formatFaderDb(level)
+                if (ui.suppressEvents) return@onValueChanged
+                ConnectionHolder.channelData[i].fader = level
+                val now = System.currentTimeMillis()
+                if (now - ui.lastFaderSendTime >= minSendIntervalMs) {
+                    ui.lastFaderSendTime = now
                     sendFader(i, level)
                 }
-            })
+            }
+            fader.onDragFinished = onDragFinished@{ level ->
+                ui.isDragging = false
+                if (ui.suppressEvents) return@onDragFinished
+                ConnectionHolder.channelData[i].fader = level
+                sendFader(i, level)
+            }
 
             // ВАЖНО - ПОДТВЕРЖДЕНО ЗАХВАТОМ ТРАФИКА: настоящее подтверждение
             // mute-переключения от пульта через подписку приходит с задержкой
@@ -688,7 +659,7 @@ class MainActivity : AppCompatActivity() {
         val rootView: android.view.View,
         val labelView: TextView,
         val headerView: android.view.View,
-        val fader: SeekBar,
+        val fader: FaderView,
         val levelText: TextView,
         val muteButton: Button,
         val soloButton: ToggleButton,
@@ -726,8 +697,7 @@ class MainActivity : AppCompatActivity() {
         val strip = inflater.inflate(R.layout.channel_strip, container, false)
 
         val labelView = strip.findViewById<TextView>(R.id.textChannelLabel)
-        val fader = strip.findViewById<SeekBar>(R.id.seekFader)
-        val faderContainer = strip.findViewById<android.widget.FrameLayout>(R.id.faderContainer)
+        val fader = strip.findViewById<FaderView>(R.id.seekFader)
         val levelText = strip.findViewById<TextView>(R.id.textLevelValue)
         val muteButton = strip.findViewById<Button>(R.id.btnMute)
         val soloButton = strip.findViewById<ToggleButton>(R.id.btnSolo)
@@ -766,39 +736,23 @@ class MainActivity : AppCompatActivity() {
 
         val ui = SimpleStripUi(strip, labelView, headerView, fader, levelText, muteButton, soloButton, soloBButton, meterBar)
 
-        faderContainer.viewTreeObserver.addOnGlobalLayoutListener(
-            object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
-                override fun onGlobalLayout() {
-                    val h = faderContainer.height
-                    if (h > 0) {
-                        val p = fader.layoutParams
-                        if (p.width != h) {
-                            p.width = h
-                            fader.layoutParams = p
-                        }
-                        faderContainer.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                    }
-                }
-            }
-        )
+        // FaderView рисует себя сам - старый трюк с измерением контейнера
+        // через viewTreeObserver и подгонкой ширины повёрнутого SeekBar
+        // больше не нужен.
 
-        fader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                val level = progress / 1000f
-                levelText.text = formatFaderDb(level)
-                if (!fromUser || ui.suppressEvents) return
-                val now = System.currentTimeMillis()
-                if (now - ui.lastFaderSendTime >= minSendIntervalMs) {
-                    ui.lastFaderSendTime = now
-                    onFader(level)
-                }
+        fader.onValueChanged = onValueChanged@{ level ->
+            levelText.text = formatFaderDb(level)
+            if (ui.suppressEvents) return@onValueChanged
+            val now = System.currentTimeMillis()
+            if (now - ui.lastFaderSendTime >= minSendIntervalMs) {
+                ui.lastFaderSendTime = now
+                onFader(level)
             }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {
-                if (ui.suppressEvents) return
-                onFader((sb?.progress ?: 0) / 1000f)
-            }
-        })
+        }
+        fader.onDragFinished = onDragFinished@{ level ->
+            if (ui.suppressEvents) return@onDragFinished
+            onFader(level)
+        }
 
         muteButton.setOnClickListener {
             val newState = !ui.mutedLocal
@@ -820,7 +774,7 @@ class MainActivity : AppCompatActivity() {
         // Восстановление после поворота экрана - сразу подтягиваем последние
         // известные значения, не дожидаясь нового push.
         ui.suppressEvents = true
-        fader.progress = (initialFader * 1000).toInt()
+        fader.value = initialFader
         levelText.text = formatFaderDb(initialFader)
         ui.suppressEvents = false
         ui.mutedLocal = initialMuted
@@ -1575,7 +1529,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val ui = auxBusStrips.getOrNull(sub.channel) ?: return
                 ui.suppressEvents = true
-                ui.fader.progress = (level * 1000).toInt()
+                ui.fader.value = level
                 ui.levelText.text = formatFaderDb(level)
                 ui.suppressEvents = false
             }
@@ -1670,7 +1624,7 @@ class MainActivity : AppCompatActivity() {
                 ConnectionHolder.vcaData[sub.channel].fader = level
                 val ui = vcaStrips.getOrNull(sub.channel) ?: return
                 ui.suppressEvents = true
-                ui.fader.progress = (level * 1000).toInt()
+                ui.fader.value = level
                 ui.levelText.text = formatFaderDb(level)
                 ui.suppressEvents = false
             }
@@ -1749,7 +1703,7 @@ class MainActivity : AppCompatActivity() {
                 ConnectionHolder.mainOutData[sub.channel].fader = level
                 val ui = mainOutStrips.getOrNull(sub.channel) ?: return
                 ui.suppressEvents = true
-                ui.fader.progress = (level * 1000).toInt()
+                ui.fader.value = level
                 ui.levelText.text = formatFaderDb(level)
                 ui.suppressEvents = false
             }
@@ -2139,7 +2093,7 @@ class MainActivity : AppCompatActivity() {
         data.fader = level
         val ui = masterStrips.getOrNull(masterIndex) ?: return
         ui.suppressEvents = true
-        ui.fader.progress = (level.coerceIn(0f, 1f) * 1000).toInt()
+        ui.fader.value = level.coerceIn(0f, 1f)
         ui.levelText.text = formatFaderDb(level)
         ui.suppressEvents = false
     }
@@ -2165,7 +2119,7 @@ class MainActivity : AppCompatActivity() {
         data.fader = level
         val ui = auxStrips.getOrNull(auxIndex) ?: return
         ui.suppressEvents = true
-        ui.fader.progress = (level.coerceIn(0f, 1f) * 1000).toInt()
+        ui.fader.value = level.coerceIn(0f, 1f)
         ui.levelText.text = formatFaderDb(level)
         ui.suppressEvents = false
     }
@@ -2904,7 +2858,7 @@ class MainActivity : AppCompatActivity() {
         detailSolo.setBackgroundColor(
             Color.parseColor(if (ui.soloButton.isChecked) "#ff9f0a" else "#3a3a3c")
         )
-        detailFader.progress = ui.fader.progress
+        detailFader.progress = (ui.fader.value * 1000).toInt()
         detailLevelText.text = ui.levelValueText.text
 
         detailMute.setOnClickListener {
@@ -2934,7 +2888,7 @@ class MainActivity : AppCompatActivity() {
             override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
                 val level = progress / 1000f
                 detailLevelText.text = formatFaderDb(level)
-                ui.fader.progress = progress
+                ui.fader.value = level
                 if (!fromUser) return
                 ConnectionHolder.channelData[channel].fader = level
                 val now = System.currentTimeMillis()
@@ -4188,7 +4142,7 @@ class MainActivity : AppCompatActivity() {
         ConnectionHolder.channelData[channel].fader = level
         if (ui == null) return
         ui.suppressEvents = true
-        ui.fader.progress = (level.coerceIn(0f, 1f) * 1000).toInt()
+        ui.fader.value = level.coerceIn(0f, 1f)
         ui.levelValueText.text = formatFaderDb(level)
         ui.suppressEvents = false
 

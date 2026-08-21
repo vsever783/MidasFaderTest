@@ -117,22 +117,10 @@
                 android:background="#34c759" />
         </FrameLayout>
 
-        <FrameLayout
-            android:id="@+id/faderContainer"
+        <com.example.midasfadercontrol.FaderView
+            android:id="@+id/seekFader"
             android:layout_width="@dimen/channel_fader_thickness"
-            android:layout_height="match_parent">
-
-            <SeekBar
-                android:id="@+id/seekFader"
-                android:layout_width="220dp"
-                android:layout_height="@dimen/channel_fader_thickness"
-                android:layout_gravity="center"
-                android:max="1000"
-                android:progress="0"
-                android:progressTint="#ff9f0a"
-                android:thumbTint="#ffffff"
-                android:rotation="270" />
-        </FrameLayout>
+            android:layout_height="match_parent" />
     </LinearLayout>
 
     <Button
