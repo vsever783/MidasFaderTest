@@ -40,7 +40,7 @@
 
     <!--
         Посыл канала в шину занимает ВСЮ оставшуюся высоту (запрошено) -
-        ширина повёрнутого SeekBar подгоняется под реальную высоту
+        ширина фейдера фиксированная (FaderView сам занимает выделенную
         программно, той же логикой, что и у обычного фейдера в инженерском
         режиме - работает и в портретной, и в альбомной ориентации одинаково.
         Рядом - узкая полоска-метр (индикация того, что на канал реально
@@ -52,6 +52,7 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:layout_marginTop="@dimen/monitor_channel_fader_top_margin"
+        android:gravity="center_horizontal"
         android:orientation="horizontal">
 
         <FrameLayout
@@ -68,23 +69,10 @@
                 android:scaleY="0" />
         </FrameLayout>
 
-        <FrameLayout
-            android:id="@+id/monitorSendContainer"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1">
-
-            <SeekBar
-                android:id="@+id/seekMonitorSend"
-                android:layout_width="220dp"
-                android:layout_height="@dimen/monitor_channel_fader_thickness"
-                android:layout_gravity="center"
-                android:max="1000"
-                android:progress="0"
-                android:progressTint="#ff9f0a"
-                android:thumbTint="#ffffff"
-                android:rotation="270" />
-        </FrameLayout>
+        <com.example.midasfadercontrol.FaderView
+            android:id="@+id/seekMonitorSend"
+            android:layout_width="@dimen/monitor_channel_fader_thickness"
+            android:layout_height="match_parent" />
     </LinearLayout>
 
 </LinearLayout>

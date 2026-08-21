@@ -269,6 +269,7 @@
 
                     <Button
                         android:id="@+id/btnDetailPhantom"
+                        android:background="@drawable/console_button_background"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
@@ -281,6 +282,7 @@
 
                     <Button
                         android:id="@+id/btnDetailPhase"
+                        android:background="@drawable/console_button_background"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
@@ -294,6 +296,7 @@
                 <!-- Стерео-пара (link) - НЕ подтверждено реальным захватом. -->
                 <Button
                     android:id="@+id/btnDetailLink"
+                    android:background="@drawable/console_button_background"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
@@ -345,6 +348,7 @@
 
                     <Button
                         android:id="@+id/btnDetailApplyName"
+                        android:background="@drawable/console_button_background"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="8dp"
@@ -379,6 +383,7 @@
 
                     <Button
                         android:id="@+id/btnDetailHpFilterIn"
+                        android:background="@drawable/console_button_background"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
@@ -391,6 +396,7 @@
 
                     <Button
                         android:id="@+id/btnDetailLpFilterIn"
+                        android:background="@drawable/console_button_background"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
@@ -525,6 +531,7 @@
 
             <ToggleButton
                 android:id="@+id/detailSolo"
+                android:background="@drawable/console_button_background"
                 android:layout_width="match_parent"
                 android:layout_height="30dp"
                 android:layout_marginStart="4dp"
@@ -538,6 +545,7 @@
                  даже у обычных каналов). -->
             <ToggleButton
                 android:id="@+id/detailSoloB"
+                android:background="@drawable/console_button_background"
                 android:layout_width="match_parent"
                 android:layout_height="26dp"
                 android:layout_marginStart="4dp"
@@ -550,6 +558,7 @@
 
             <Button
                 android:id="@+id/detailMute"
+                android:background="@drawable/console_button_background"
                 android:layout_width="match_parent"
                 android:layout_height="30dp"
                 android:layout_marginStart="4dp"
@@ -581,22 +590,10 @@
                         android:scaleY="0" />
                 </FrameLayout>
 
-                <FrameLayout
-                    android:id="@+id/detailFaderContainer"
-                    android:layout_width="28dp"
-                    android:layout_height="match_parent">
-
-                    <SeekBar
-                        android:id="@+id/detailFader"
-                        android:layout_width="220dp"
-                        android:layout_height="28dp"
-                        android:layout_gravity="center"
-                        android:max="1000"
-                        android:progress="0"
-                        android:progressTint="#ff9f0a"
-                        android:thumbTint="#ffffff"
-                        android:rotation="270" />
-                </FrameLayout>
+                <com.example.midasfadercontrol.FaderView
+                    android:id="@+id/detailFader"
+                    android:layout_width="34dp"
+                    android:layout_height="match_parent" />
             </LinearLayout>
 
             <TextView

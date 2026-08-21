@@ -219,7 +219,7 @@ class MainActivity : AppCompatActivity() {
     private var monitorBusFader: SeekBar? = null
     private var monitorBusMuteButton: Button? = null
     private var monitorBusMutedLocal = false
-    private data class MonitorChannelUi(val seek: SeekBar, val valueText: TextView, val meterBar: android.view.View)
+    private data class MonitorChannelUi(val seek: FaderView, val valueText: TextView, val meterBar: android.view.View)
     private var monitorChannelStrips: Array<MonitorChannelUi?> = arrayOfNulls(56)
     // Какая VCA-группа сейчас открыта на экране "VCA N MEMBERS" (для live-
     // обновления кнопок push-ответами) и сами кнопки по ключу "тип:индекс".
@@ -282,7 +282,7 @@ class MainActivity : AppCompatActivity() {
             btn.text = if (data.name.isNotBlank()) "BUS ${b + 1} — ${data.name}" else "BUS ${b + 1}"
             btn.setTextColor(Color.parseColor("#ffffff"))
             btn.backgroundTintList = null
-            btn.setBackgroundColor(Color.parseColor("#3a3a3c"))
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
             val params = android.widget.LinearLayout.LayoutParams(
                 android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
@@ -317,7 +317,7 @@ class MainActivity : AppCompatActivity() {
         busFader.progress = (busData.fader * 1000).toInt()
         busMute.backgroundTintList = null
         monitorBusMutedLocal = busData.mutedLocal
-        busMute.setBackgroundColor(Color.parseColor(if (busData.mutedLocal) "#ff3b30" else "#3a3a3c"))
+        busMute.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (busData.mutedLocal) "#ff3b30" else "#3a3a3c"))
 
         busFader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             var lastSend = 0L
@@ -340,7 +340,7 @@ class MainActivity : AppCompatActivity() {
         })
         busMute.setOnClickListener {
             monitorBusMutedLocal = !monitorBusMutedLocal
-            busMute.setBackgroundColor(Color.parseColor(if (monitorBusMutedLocal) "#ff3b30" else "#3a3a3c"))
+            busMute.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (monitorBusMutedLocal) "#ff3b30" else "#3a3a3c"))
             ConnectionHolder.auxBusData[bus].mutedLocal = monitorBusMutedLocal
             sendAuxBusMute(bus, true)
         }
@@ -365,7 +365,7 @@ class MainActivity : AppCompatActivity() {
             val vPad = resources.getDimensionPixelSize(R.dimen.bank_button_v_padding)
             btn.setPadding(24, vPad, 24, vPad)
             btn.setTextColor(Color.parseColor("#ffffff"))
-            btn.setBackgroundColor(Color.parseColor("#3a3a3c"))
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
             val params = android.widget.LinearLayout.LayoutParams(
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
@@ -383,7 +383,7 @@ class MainActivity : AppCompatActivity() {
         monitorBankStart = start
         for ((idx, btn) in monitorBankButtons.withIndex()) {
             val active = idx * channelsPerBank == start
-            btn.setBackgroundColor(Color.parseColor(if (active) "#ff9f0a" else "#3a3a3c"))
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (active) "#ff9f0a" else "#3a3a3c"))
             btn.setTextColor(Color.parseColor(if (active) "#000000" else "#ffffff"))
         }
         buildMonitorChannelStrips(monitorSelectedBus, start)
@@ -403,8 +403,7 @@ class MainActivity : AppCompatActivity() {
             val strip = inflater.inflate(R.layout.channel_strip_monitor, container, false)
             val label = strip.findViewById<TextView>(R.id.textMonitorChannelLabel)
             val valueText = strip.findViewById<TextView>(R.id.textMonitorSendValue)
-            val seek = strip.findViewById<SeekBar>(R.id.seekMonitorSend)
-            val sendContainer = strip.findViewById<android.widget.FrameLayout>(R.id.monitorSendContainer)
+            val seek = strip.findViewById<FaderView>(R.id.seekMonitorSend)
             val meterBar = strip.findViewById<android.view.View>(R.id.monitorMeterBar)
             setupMeterBarPivot(meterBar)
 
@@ -414,49 +413,24 @@ class MainActivity : AppCompatActivity() {
                 strip.findViewById<android.view.View>(R.id.monitorChannelHeader).setBackgroundColor(it)
             }
             val level = chData.auxSends.getOrElse(bus) { 0f }
-            seek.progress = (level * 1000).toInt()
+            seek.value = level
             valueText.text = "%.2f".format(level)
-
-            // Та же подгонка ширины повёрнутого фейдера под реальную высоту,
-            // что и везде в приложении - фейдер тянется на всю доступную
-            // область канала целиком.
-            sendContainer.viewTreeObserver.addOnGlobalLayoutListener(
-                object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
-                    override fun onGlobalLayout() {
-                        val h = sendContainer.height
-                        if (h > 0) {
-                            val p = seek.layoutParams
-                            if (p.width != h) {
-                                p.width = h
-                                seek.layoutParams = p
-                            }
-                            sendContainer.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                        }
-                    }
-                }
-            )
 
             var lastSend = 0L
             val channelIndex = i
-            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val lvl = progress / 1000f
-                    valueText.text = "%.2f".format(lvl)
-                    if (!fromUser) return
-                    ConnectionHolder.channelData[channelIndex].auxSends[bus] = lvl
-                    val now = System.currentTimeMillis()
-                    if (now - lastSend >= minSendIntervalMs) {
-                        lastSend = now
-                        sendSubSend(channelIndex, bus + 1, lvl)
-                    }
-                }
-                override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) {
-                    val lvl = (sb?.progress ?: 0) / 1000f
-                    ConnectionHolder.channelData[channelIndex].auxSends[bus] = lvl
+            seek.onValueChanged = { lvl ->
+                valueText.text = "%.2f".format(lvl)
+                ConnectionHolder.channelData[channelIndex].auxSends[bus] = lvl
+                val now = System.currentTimeMillis()
+                if (now - lastSend >= minSendIntervalMs) {
+                    lastSend = now
                     sendSubSend(channelIndex, bus + 1, lvl)
                 }
-            })
+            }
+            seek.onDragFinished = { lvl ->
+                ConnectionHolder.channelData[channelIndex].auxSends[bus] = lvl
+                sendSubSend(channelIndex, bus + 1, lvl)
+            }
 
             monitorChannelStrips[i] = MonitorChannelUi(seek, valueText, meterBar)
             monitorChannelLabels[i] = label
@@ -515,8 +489,8 @@ class MainActivity : AppCompatActivity() {
             soloButton.backgroundTintList = null
             muteButton.stateListAnimator = null
             soloButton.stateListAnimator = null
-            muteButton.setBackgroundColor(Color.parseColor("#3a3a3c"))
-            soloButton.setBackgroundColor(Color.parseColor("#3a3a3c"))
+            muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
+            soloButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
 
             // FaderView рисует себя сам в обычных (не повёрнутых) координатах -
             // старый трюк с измерением контейнера через viewTreeObserver и
@@ -572,7 +546,7 @@ class MainActivity : AppCompatActivity() {
             soloButton.setOnCheckedChangeListener { _: CompoundButton, isChecked: Boolean ->
                 if (ui.suppressEvents) return@setOnCheckedChangeListener
                 ConnectionHolder.channelData[i].soloed = isChecked
-                soloButton.setBackgroundColor(
+                soloButton.backgroundTintList = android.content.res.ColorStateList.valueOf(
                     Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c")
                 )
                 sendSolo(i, isChecked)
@@ -604,7 +578,7 @@ class MainActivity : AppCompatActivity() {
         }
         for ((index, btn) in bankButtons.withIndex()) {
             val isActive = index * channelsPerBank == bankStart
-            btn.setBackgroundColor(Color.parseColor(if (isActive) "#ff9f0a" else "#3a3a3c"))
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (isActive) "#ff9f0a" else "#3a3a3c"))
             btn.setTextColor(Color.parseColor(if (isActive) "#000000" else "#ffffff"))
         }
     }
@@ -631,7 +605,7 @@ class MainActivity : AppCompatActivity() {
             val vPad = resources.getDimensionPixelSize(R.dimen.bank_button_v_padding)
             btn.setPadding(24, vPad, 24, vPad)
             btn.setTextColor(Color.parseColor("#ffffff"))
-            btn.setBackgroundColor(Color.parseColor("#3a3a3c"))
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
             val params = android.widget.LinearLayout.LayoutParams(
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
@@ -713,8 +687,8 @@ class MainActivity : AppCompatActivity() {
         muteButton.stateListAnimator = null
         soloButton.backgroundTintList = null
         soloButton.stateListAnimator = null
-        muteButton.setBackgroundColor(Color.parseColor("#3a3a3c"))
-        soloButton.setBackgroundColor(Color.parseColor("#3a3a3c"))
+        muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
+        soloButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
 
         // Вторая шина solo - ПОДТВЕРЖДЕНО реальным захватом. Только для
         // мастера/aux returns/aux-шин (у обычных 56 каналов остаётся
@@ -731,7 +705,7 @@ class MainActivity : AppCompatActivity() {
         }
         soloBButton.backgroundTintList = null
         soloBButton.stateListAnimator = null
-        soloBButton.setBackgroundColor(Color.parseColor(if (initialSoloB) "#ff9f0a" else "#3a3a3c"))
+        soloBButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (initialSoloB) "#ff9f0a" else "#3a3a3c"))
         soloBButton.isChecked = initialSoloB
 
         val ui = SimpleStripUi(strip, labelView, headerView, fader, levelText, muteButton, soloButton, soloBButton, meterBar)
@@ -757,17 +731,17 @@ class MainActivity : AppCompatActivity() {
         muteButton.setOnClickListener {
             val newState = !ui.mutedLocal
             ui.mutedLocal = newState
-            muteButton.setBackgroundColor(Color.parseColor(if (newState) "#ff3b30" else "#3a3a3c"))
+            muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) "#ff3b30" else "#3a3a3c"))
             onMute(newState)
         }
         soloButton.setOnCheckedChangeListener { _, isChecked ->
             if (ui.suppressEvents) return@setOnCheckedChangeListener
-            soloButton.setBackgroundColor(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
+            soloButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
             onSolo(isChecked)
         }
         soloBButton.setOnCheckedChangeListener { _, isChecked ->
             if (ui.suppressEvents) return@setOnCheckedChangeListener
-            soloBButton.setBackgroundColor(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
+            soloBButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
             onSoloB(isChecked)
         }
 
@@ -778,7 +752,7 @@ class MainActivity : AppCompatActivity() {
         levelText.text = formatFaderDb(initialFader)
         ui.suppressEvents = false
         ui.mutedLocal = initialMuted
-        muteButton.setBackgroundColor(Color.parseColor(if (initialMuted) "#ff3b30" else "#3a3a3c"))
+        muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (initialMuted) "#ff3b30" else "#3a3a3c"))
 
         container.addView(strip)
         return ui
@@ -896,10 +870,10 @@ class MainActivity : AppCompatActivity() {
     private fun setupGlobalTapButton() {
         val btn = findViewById<Button>(R.id.btnGlobalTap)
         btn.backgroundTintList = null
-        btn.setBackgroundColor(Color.parseColor("#3a3a3c"))
+        btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
         btn.setOnClickListener {
-            btn.setBackgroundColor(Color.parseColor("#ff9f0a"))
-            btn.postDelayed({ btn.setBackgroundColor(Color.parseColor("#3a3a3c")) }, 120)
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#ff9f0a"))
+            btn.postDelayed({ btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c")) }, 120)
             sendRawAsync(Pro2Commands.setGlobalTap())
         }
     }
@@ -934,7 +908,7 @@ class MainActivity : AppCompatActivity() {
             val vPad = resources.getDimensionPixelSize(R.dimen.bank_button_v_padding)
             btn.setPadding(24, vPad, 24, vPad)
             btn.setTextColor(Color.parseColor("#ffffff"))
-            btn.setBackgroundColor(Color.parseColor("#3a3a3c"))
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
             val params = android.widget.LinearLayout.LayoutParams(
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
@@ -1002,7 +976,7 @@ class MainActivity : AppCompatActivity() {
 
         for ((m, btn) in modeButtons) {
             val active = m == mode
-            btn.setBackgroundColor(Color.parseColor(if (active) "#ff9f0a" else "#3a3a3c"))
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (active) "#ff9f0a" else "#3a3a3c"))
             btn.setTextColor(Color.parseColor(if (active) "#000000" else "#ffffff"))
         }
     }
@@ -1118,7 +1092,7 @@ class MainActivity : AppCompatActivity() {
                 ConnectionHolder.channelData[sub.channel].soloBLocal = soloed
                 if (openDetailChannel == sub.channel) {
                     detailSoloBRef?.isChecked = soloed
-                    detailSoloBRef?.setBackgroundColor(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
+                    detailSoloBRef?.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
                 }
             }
             ParamKind.FADER, ParamKind.GAIN -> {
@@ -1199,7 +1173,7 @@ class MainActivity : AppCompatActivity() {
                 if (openDetailChannel == sub.channel) {
                     val btn = detailCompDynViews?.filtersInButton
                     btn?.text = if (on) "FILTER ON" else "FILTER OFF"
-                    btn?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+                    btn?.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
                 }
             }
             ParamKind.COMP_FILTER_FREQ -> {
@@ -1283,7 +1257,7 @@ class MainActivity : AppCompatActivity() {
                 ConnectionHolder.channelData[sub.channel].linkedLocal = on
                 if (openDetailChannel == sub.channel) {
                     detailLinkButton?.text = if (on) "LINK ON" else "LINK OFF"
-                    detailLinkButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+                    detailLinkButton?.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
                 }
             }
             ParamKind.HP_FILTER_IN -> {
@@ -1292,7 +1266,7 @@ class MainActivity : AppCompatActivity() {
                 ConnectionHolder.channelData[sub.channel].hpFilterInLocal = on
                 if (openDetailChannel == sub.channel) {
                     detailHpFilterInButton?.text = if (on) "HP FILTER ON" else "HP FILTER OFF"
-                    detailHpFilterInButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+                    detailHpFilterInButton?.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
                     detailEqViews?.let { it.graphView.hpOn = on; it.graphView.invalidate() }
                 }
             }
@@ -1302,7 +1276,7 @@ class MainActivity : AppCompatActivity() {
                 ConnectionHolder.channelData[sub.channel].lpFilterInLocal = on
                 if (openDetailChannel == sub.channel) {
                     detailLpFilterInButton?.text = if (on) "LP FILTER ON" else "LP FILTER OFF"
-                    detailLpFilterInButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+                    detailLpFilterInButton?.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
                     detailEqViews?.let { it.graphView.lpOn = on; it.graphView.invalidate() }
                 }
             }
@@ -1539,11 +1513,11 @@ class MainActivity : AppCompatActivity() {
                 ConnectionHolder.auxBusData[sub.channel].mutedLocal = muted
                 if (appMode == MODE_MONITOR && monitorSelectedBus == sub.channel) {
                     monitorBusMutedLocal = muted
-                    monitorBusMuteButton?.setBackgroundColor(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
+                    monitorBusMuteButton?.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
                 }
                 val ui = auxBusStrips.getOrNull(sub.channel) ?: return
                 ui.mutedLocal = muted
-                ui.muteButton.setBackgroundColor(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
+                ui.muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
             }
             ParamKind.SOLO -> {
                 val soloed = blob.size >= 4 &&
@@ -1551,7 +1525,7 @@ class MainActivity : AppCompatActivity() {
                 val ui = auxBusStrips.getOrNull(sub.channel) ?: return
                 ui.suppressEvents = true
                 ui.soloButton.isChecked = soloed
-                ui.soloButton.setBackgroundColor(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
+                ui.soloButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
                 ui.suppressEvents = false
             }
             ParamKind.SOLO_B -> {
@@ -1589,7 +1563,7 @@ class MainActivity : AppCompatActivity() {
                 val linked = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
                 ConnectionHolder.auxBusData.getOrNull(sub.channel)?.linked = linked
                 if (openGroupDetailKind == "aux" && openGroupDetailIndex == sub.channel) {
-                    groupDetailLinkButton?.setBackgroundColor(Color.parseColor(if (linked) "#ff9f0a" else "#3a3a3c"))
+                    groupDetailLinkButton?.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (linked) "#ff9f0a" else "#3a3a3c"))
                 }
             }
             ParamKind.EQ_FREQ, ParamKind.EQ_GAIN, ParamKind.EQ_WIDTH, ParamKind.COMP_RATIO,
@@ -1634,7 +1608,7 @@ class MainActivity : AppCompatActivity() {
                 ConnectionHolder.vcaData[sub.channel].mutedLocal = muted
                 val ui = vcaStrips.getOrNull(sub.channel) ?: return
                 ui.mutedLocal = muted
-                ui.muteButton.setBackgroundColor(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
+                ui.muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
             }
             ParamKind.SOLO -> {
                 val soloed = blob.size >= 4 &&
@@ -1642,7 +1616,7 @@ class MainActivity : AppCompatActivity() {
                 val ui = vcaStrips.getOrNull(sub.channel) ?: return
                 ui.suppressEvents = true
                 ui.soloButton.isChecked = soloed
-                ui.soloButton.setBackgroundColor(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
+                ui.soloButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
                 ui.suppressEvents = false
             }
             ParamKind.NAME -> {
@@ -1685,7 +1659,7 @@ class MainActivity : AppCompatActivity() {
         // подкрашиваем кнопку вживую, а не только на будущее открытие.
         if (openVcaMembersIndex == sub.vcaIndex) {
             val btn = vcaMemberButtons["${sub.childType}:${sub.childIndex}"] ?: return
-            btn.setBackgroundColor(Color.parseColor(if (member) "#ff9f0a" else "#3a3a3c"))
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (member) "#ff9f0a" else "#3a3a3c"))
             btn.setTextColor(Color.parseColor(if (member) "#000000" else "#ffffff"))
         }
     }
@@ -1713,7 +1687,7 @@ class MainActivity : AppCompatActivity() {
                 ConnectionHolder.mainOutData[sub.channel].mutedLocal = muted
                 val ui = mainOutStrips.getOrNull(sub.channel) ?: return
                 ui.mutedLocal = muted
-                ui.muteButton.setBackgroundColor(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
+                ui.muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
             }
             ParamKind.SOLO -> {
                 val soloed = blob.size >= 4 &&
@@ -1721,7 +1695,7 @@ class MainActivity : AppCompatActivity() {
                 val ui = mainOutStrips.getOrNull(sub.channel) ?: return
                 ui.suppressEvents = true
                 ui.soloButton.isChecked = soloed
-                ui.soloButton.setBackgroundColor(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
+                ui.soloButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
                 ui.suppressEvents = false
             }
             ParamKind.NAME -> {
@@ -1776,7 +1750,7 @@ class MainActivity : AppCompatActivity() {
                 val linked = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
                 ConnectionHolder.mainOutData.getOrNull(sub.channel)?.linked = linked
                 if (openGroupDetailKind == "mainout" && openGroupDetailIndex == sub.channel) {
-                    groupDetailLinkButton?.setBackgroundColor(Color.parseColor(if (linked) "#ff9f0a" else "#3a3a3c"))
+                    groupDetailLinkButton?.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (linked) "#ff9f0a" else "#3a3a3c"))
                 }
             }
             ParamKind.COMP_STYLE, ParamKind.COMP_FILTER_BANDWIDTH, ParamKind.COMP_KNEE -> {
@@ -1821,7 +1795,7 @@ class MainActivity : AppCompatActivity() {
         val ui = list.getOrNull(index) ?: return
         ui.suppressEvents = true
         ui.soloBButton.isChecked = soloed
-        ui.soloBButton.setBackgroundColor(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
+        ui.soloBButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
         ui.suppressEvents = false
     }
 
@@ -1924,7 +1898,7 @@ class MainActivity : AppCompatActivity() {
     private var detailViews: ChannelDetailViews? = null
     // Ссылки на 16 пар (ползунок, текст) вкладки SENDS детального экрана,
     // пока он открыт - для живого обновления от push.
-    private var detailSendViews: Array<Pair<SeekBar, TextView>>? = null
+    private var detailSendViews: Array<Pair<FaderView, TextView>>? = null
 
     /** Виджеты одной полосы EQ, пока детальный экран открыт - для живого обновления. */
     private data class EqBandViews(
@@ -1977,7 +1951,7 @@ class MainActivity : AppCompatActivity() {
     private data class ChannelDetailViews(
         val muteButton: Button,
         val soloButton: ToggleButton,
-        val fader: SeekBar,
+        val fader: FaderView,
         val meterBar: android.view.View,
         val levelText: TextView,
         val gainKnob: RotaryKnobView,
@@ -2021,14 +1995,14 @@ class MainActivity : AppCompatActivity() {
         // подкручиваем нужный ползунок вживую.
         if (openDetailChannel == channel) {
             val pair = detailSendViews?.getOrNull(busNumber - 1) ?: return
-            pair.first.progress = (level * 1000).toInt()
+            pair.first.value = level
             pair.second.text = "%.2f".format(level)
         }
         // Если в мониторном режиме сейчас открыта именно эта шина - тоже
         // подкручиваем соответствующий канал вживую.
         if (appMode == MODE_MONITOR && monitorSelectedBus == busNumber - 1) {
             val ui = monitorChannelStrips.getOrNull(channel) ?: return
-            ui.seek.progress = (level * 1000).toInt()
+            ui.seek.value = level
             ui.valueText.text = "%.2f".format(level)
         }
     }
@@ -2038,7 +2012,7 @@ class MainActivity : AppCompatActivity() {
         if (openDetailChannel == channel) {
             val btn = detailEqViews?.inButton ?: return
             btn.text = if (on) "EQ ON" else "EQ OFF"
-            btn.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
         }
     }
 
@@ -2049,7 +2023,7 @@ class MainActivity : AppCompatActivity() {
             val views = detailEqViews ?: return
             val btn = views.bands.getOrNull(bandIndex)?.activeButton ?: return
             btn.text = if (on) "ON" else "OFF"
-            btn.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
             views.graphView.bands.getOrNull(bandIndex)?.active = on
             views.graphView.invalidate()
         }
@@ -2103,14 +2077,14 @@ class MainActivity : AppCompatActivity() {
         data.mutedLocal = muted
         val ui = masterStrips.getOrNull(masterIndex) ?: return
         ui.mutedLocal = muted
-        ui.muteButton.setBackgroundColor(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
+        ui.muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
     }
 
     private fun updateMasterSoloUi(masterIndex: Int, soloed: Boolean) {
         val ui = masterStrips.getOrNull(masterIndex) ?: return
         ui.suppressEvents = true
         ui.soloButton.isChecked = soloed
-        ui.soloButton.setBackgroundColor(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
+        ui.soloButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
         ui.suppressEvents = false
     }
 
@@ -2129,14 +2103,14 @@ class MainActivity : AppCompatActivity() {
         data.mutedLocal = muted
         val ui = auxStrips.getOrNull(auxIndex) ?: return
         ui.mutedLocal = muted
-        ui.muteButton.setBackgroundColor(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
+        ui.muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
     }
 
     private fun updateAuxReturnSoloUi(auxIndex: Int, soloed: Boolean) {
         val ui = auxStrips.getOrNull(auxIndex) ?: return
         ui.suppressEvents = true
         ui.soloButton.isChecked = soloed
-        ui.soloButton.setBackgroundColor(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
+        ui.soloButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c"))
         ui.suppressEvents = false
     }
 
@@ -2205,18 +2179,19 @@ class MainActivity : AppCompatActivity() {
                 }
                 var memberState = initial(i)
                 val btn = Button(this).apply {
+                    setBackgroundResource(R.drawable.console_button_background)
                     text = label
                     textSize = 10f
                     minHeight = 0
                     backgroundTintList = null
                     setPadding(4, 12, 4, 12)
                     setTextColor(Color.parseColor(if (memberState) "#000000" else "#ffffff"))
-                    setBackgroundColor(Color.parseColor(if (memberState) "#ff9f0a" else "#3a3a3c"))
+                    backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (memberState) "#ff9f0a" else "#3a3a3c"))
                     layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                         .apply { marginEnd = 4 }
                     setOnClickListener {
                         memberState = !memberState
-                        setBackgroundColor(Color.parseColor(if (memberState) "#ff9f0a" else "#3a3a3c"))
+                        backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (memberState) "#ff9f0a" else "#3a3a3c"))
                         setTextColor(Color.parseColor(if (memberState) "#000000" else "#ffffff"))
                         onToggle(i, memberState)
                     }
@@ -2524,23 +2499,21 @@ class MainActivity : AppCompatActivity() {
 
         val muteBtn = view.findViewById<Button>(R.id.groupDetailMute)
         val soloBtn = view.findViewById<ToggleButton>(R.id.groupDetailSolo)
-        val fader = view.findViewById<SeekBar>(R.id.groupDetailFader)
-        val faderContainer = view.findViewById<android.widget.FrameLayout>(R.id.groupDetailFaderContainer)
+        val fader = view.findViewById<FaderView>(R.id.groupDetailFader)
         val meterBar = view.findViewById<android.view.View>(R.id.groupDetailMeterBar)
         setupMeterBarPivot(meterBar)
         val levelText = view.findViewById<TextView>(R.id.textGroupDetailLevelValue)
 
         muteBtn.backgroundTintList = null
-        muteBtn.setBackgroundColor(Color.parseColor(if (data.mutedLocal) "#ff3b30" else "#3a3a3c"))
+        muteBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (data.mutedLocal) "#ff3b30" else "#3a3a3c"))
         soloBtn.backgroundTintList = null
-        fader.max = 1000
-        fader.progress = (data.fader * 1000).toInt()
+        fader.value = data.fader
         levelText.text = formatFaderDb(data.fader)
 
         val linkBtn = view.findViewById<Button>(R.id.groupDetailLink)
         groupDetailLinkButton = linkBtn
         linkBtn.backgroundTintList = null
-        linkBtn.setBackgroundColor(Color.parseColor(if (data.linked) "#ff9f0a" else "#3a3a3c"))
+        linkBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (data.linked) "#ff9f0a" else "#3a3a3c"))
         linkBtn.setOnClickListener {
             sendRawAsync(Pro2Commands.setAuxBusPairingNext(index))
         }
@@ -2548,36 +2521,21 @@ class MainActivity : AppCompatActivity() {
         muteBtn.setOnClickListener {
             val newState = !ConnectionHolder.auxBusData[index].mutedLocal
             ConnectionHolder.auxBusData[index].mutedLocal = newState
-            muteBtn.setBackgroundColor(Color.parseColor(if (newState) "#ff3b30" else "#3a3a3c"))
+            muteBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) "#ff3b30" else "#3a3a3c"))
             sendAuxBusMute(index, true)
         }
         soloBtn.setOnCheckedChangeListener { _, isChecked ->
-            soloBtn.setBackgroundColor(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
+            soloBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
             sendAuxBusSolo(index, isChecked)
         }
-        fader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                val level = progress / 1000f
-                levelText.text = formatFaderDb(level)
-                if (!fromUser) return
-                ConnectionHolder.auxBusData[index].fader = level
-                sendAuxBusFader(index, level)
-            }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {
-                sendAuxBusFader(index, (sb?.progress ?: 0) / 1000f)
-            }
-        })
-        faderContainer.viewTreeObserver.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
-            override fun onGlobalLayout() {
-                val h = faderContainer.height
-                if (h > 0) {
-                    val p = fader.layoutParams
-                    if (p.width != h) { p.width = h; fader.layoutParams = p }
-                    faderContainer.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                }
-            }
-        })
+        fader.onValueChanged = { level ->
+            levelText.text = formatFaderDb(level)
+            ConnectionHolder.auxBusData[index].fader = level
+            sendAuxBusFader(index, level)
+        }
+        fader.onDragFinished = { level ->
+            sendAuxBusFader(index, level)
+        }
 
         val compContent = view.findViewById<android.widget.LinearLayout>(R.id.groupCompBlockContent)
         val eqContent = view.findViewById<android.widget.LinearLayout>(R.id.groupEqBlockContent)
@@ -2634,23 +2592,21 @@ class MainActivity : AppCompatActivity() {
 
         val muteBtn = view.findViewById<Button>(R.id.groupDetailMute)
         val soloBtn = view.findViewById<ToggleButton>(R.id.groupDetailSolo)
-        val fader = view.findViewById<SeekBar>(R.id.groupDetailFader)
-        val faderContainer = view.findViewById<android.widget.FrameLayout>(R.id.groupDetailFaderContainer)
+        val fader = view.findViewById<FaderView>(R.id.groupDetailFader)
         val meterBar = view.findViewById<android.view.View>(R.id.groupDetailMeterBar)
         setupMeterBarPivot(meterBar)
         val levelText = view.findViewById<TextView>(R.id.textGroupDetailLevelValue)
 
         muteBtn.backgroundTintList = null
-        muteBtn.setBackgroundColor(Color.parseColor(if (data.mutedLocal) "#ff3b30" else "#3a3a3c"))
+        muteBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (data.mutedLocal) "#ff3b30" else "#3a3a3c"))
         soloBtn.backgroundTintList = null
-        fader.max = 1000
-        fader.progress = (data.fader * 1000).toInt()
+        fader.value = data.fader
         levelText.text = formatFaderDb(data.fader)
 
         val linkBtn = view.findViewById<Button>(R.id.groupDetailLink)
         groupDetailLinkButton = linkBtn
         linkBtn.backgroundTintList = null
-        linkBtn.setBackgroundColor(Color.parseColor(if (data.linked) "#ff9f0a" else "#3a3a3c"))
+        linkBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (data.linked) "#ff9f0a" else "#3a3a3c"))
         linkBtn.setOnClickListener {
             sendRawAsync(Pro2Commands.setMainOutPairingNext(index))
         }
@@ -2658,36 +2614,21 @@ class MainActivity : AppCompatActivity() {
         muteBtn.setOnClickListener {
             val newState = !ConnectionHolder.mainOutData[index].mutedLocal
             ConnectionHolder.mainOutData[index].mutedLocal = newState
-            muteBtn.setBackgroundColor(Color.parseColor(if (newState) "#ff3b30" else "#3a3a3c"))
+            muteBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) "#ff3b30" else "#3a3a3c"))
             sendRawAsync(Pro2Commands.setMainOutMute(index, true))
         }
         soloBtn.setOnCheckedChangeListener { _, isChecked ->
-            soloBtn.setBackgroundColor(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
+            soloBtn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
             sendRawAsync(Pro2Commands.setMainOutSolo(index, isChecked))
         }
-        fader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                val level = progress / 1000f
-                levelText.text = formatFaderDb(level)
-                if (!fromUser) return
-                ConnectionHolder.mainOutData[index].fader = level
-                sendRawAsync(Pro2Commands.setMainOutFader(index, level))
-            }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {
-                sendRawAsync(Pro2Commands.setMainOutFader(index, (sb?.progress ?: 0) / 1000f))
-            }
-        })
-        faderContainer.viewTreeObserver.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
-            override fun onGlobalLayout() {
-                val h = faderContainer.height
-                if (h > 0) {
-                    val p = fader.layoutParams
-                    if (p.width != h) { p.width = h; fader.layoutParams = p }
-                    faderContainer.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                }
-            }
-        })
+        fader.onValueChanged = { level ->
+            levelText.text = formatFaderDb(level)
+            ConnectionHolder.mainOutData[index].fader = level
+            sendRawAsync(Pro2Commands.setMainOutFader(index, level))
+        }
+        fader.onDragFinished = { level ->
+            sendRawAsync(Pro2Commands.setMainOutFader(index, level))
+        }
 
         val compContent = view.findViewById<android.widget.LinearLayout>(R.id.groupCompBlockContent)
         val eqContent = view.findViewById<android.widget.LinearLayout>(R.id.groupEqBlockContent)
@@ -2772,12 +2713,13 @@ class MainActivity : AppCompatActivity() {
 
         fun addCycleButton(kind: ParamKind, label: String, initial: Int, onTap: () -> Unit) {
             val btn = Button(this).apply {
+                setBackgroundResource(R.drawable.console_button_background)
                 text = "$label: $initial"
                 textSize = 10f
                 minHeight = 0
                 backgroundTintList = null
                 setTextColor(Color.parseColor("#ffffff"))
-                setBackgroundColor(Color.parseColor("#3a3a3c"))
+                backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
                 setOnClickListener { onTap() }
             }
             container.addView(btn, android.widget.LinearLayout.LayoutParams(
@@ -2843,8 +2785,7 @@ class MainActivity : AppCompatActivity() {
         // --- Постоянная панель mute/solo/фейдер/метр ---
         val detailMute = view.findViewById<Button>(R.id.detailMute)
         val detailSolo = view.findViewById<ToggleButton>(R.id.detailSolo)
-        val detailFader = view.findViewById<SeekBar>(R.id.detailFader)
-        val detailFaderContainer = view.findViewById<android.widget.FrameLayout>(R.id.detailFaderContainer)
+        val detailFader = view.findViewById<FaderView>(R.id.detailFader)
         val detailMeterBar = view.findViewById<android.view.View>(R.id.detailMeterBar)
         setupMeterBarPivot(detailMeterBar)
         val detailLevelText = view.findViewById<TextView>(R.id.textDetailLevelValue)
@@ -2853,12 +2794,12 @@ class MainActivity : AppCompatActivity() {
         detailMute.stateListAnimator = null
         detailSolo.backgroundTintList = null
         detailSolo.stateListAnimator = null
-        detailMute.setBackgroundColor(Color.parseColor(if (ui.mutedLocal) "#ff3b30" else "#3a3a3c"))
+        detailMute.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (ui.mutedLocal) "#ff3b30" else "#3a3a3c"))
         detailSolo.isChecked = ui.soloButton.isChecked
-        detailSolo.setBackgroundColor(
+        detailSolo.backgroundTintList = android.content.res.ColorStateList.valueOf(
             Color.parseColor(if (ui.soloButton.isChecked) "#ff9f0a" else "#3a3a3c")
         )
-        detailFader.progress = (ui.fader.value * 1000).toInt()
+        detailFader.value = ui.fader.value
         detailLevelText.text = ui.levelValueText.text
 
         detailMute.setOnClickListener {
@@ -2877,54 +2818,29 @@ class MainActivity : AppCompatActivity() {
         detailSoloB.stateListAnimator = null
         val soloBData = ConnectionHolder.channelData[channel]
         detailSoloB.isChecked = soloBData.soloBLocal
-        detailSoloB.setBackgroundColor(Color.parseColor(if (soloBData.soloBLocal) "#ff9f0a" else "#3a3a3c"))
+        detailSoloB.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (soloBData.soloBLocal) "#ff9f0a" else "#3a3a3c"))
         detailSoloB.setOnCheckedChangeListener { _, isChecked ->
             ConnectionHolder.channelData[channel].soloBLocal = isChecked
-            detailSoloB.setBackgroundColor(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
+            detailSoloB.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (isChecked) "#ff9f0a" else "#3a3a3c"))
             sendRawAsync(Pro2Commands.setSoloB(channel, isChecked))
         }
         detailSoloBRef = detailSoloB
-        detailFader.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                val level = progress / 1000f
-                detailLevelText.text = formatFaderDb(level)
-                ui.fader.value = level
-                if (!fromUser) return
-                ConnectionHolder.channelData[channel].fader = level
-                val now = System.currentTimeMillis()
-                if (now - ui.lastFaderSendTime >= minSendIntervalMs) {
-                    ui.lastFaderSendTime = now
-                    sendFader(channel, level)
-                }
-            }
-            override fun onStartTrackingTouch(sb: SeekBar?) {
-                ui.isDragging = true
-            }
-            override fun onStopTrackingTouch(sb: SeekBar?) {
-                ui.isDragging = false
-                val level = (sb?.progress ?: 0) / 1000f
-                ConnectionHolder.channelData[channel].fader = level
+        detailFader.onDragStarted = { ui.isDragging = true }
+        detailFader.onValueChanged = { level ->
+            detailLevelText.text = formatFaderDb(level)
+            ui.fader.value = level
+            ConnectionHolder.channelData[channel].fader = level
+            val now = System.currentTimeMillis()
+            if (now - ui.lastFaderSendTime >= minSendIntervalMs) {
+                ui.lastFaderSendTime = now
                 sendFader(channel, level)
             }
-        })
-
-        // Ширина повёрнутого фейдера подгоняется под реальную высоту, как и
-        // на основном экране.
-        detailFaderContainer.viewTreeObserver.addOnGlobalLayoutListener(
-            object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
-                override fun onGlobalLayout() {
-                    val h = detailFaderContainer.height
-                    if (h > 0) {
-                        val p = detailFader.layoutParams
-                        if (p.width != h) {
-                            p.width = h
-                            detailFader.layoutParams = p
-                        }
-                        detailFaderContainer.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                    }
-                }
-            }
-        )
+        }
+        detailFader.onDragFinished = { level ->
+            ui.isDragging = false
+            ConnectionHolder.channelData[channel].fader = level
+            sendFader(channel, level)
+        }
 
         // ВАЖНО: запоминаем ДО перезаписи ниже - иначе проверка всегда
         // будет "истина" (мы же сами через строчку это поле и перезапишем).
@@ -3057,7 +2973,7 @@ class MainActivity : AppCompatActivity() {
         // Pro2Commands.kt про enSubSendLevel1..16.
         val sendsRow = view.findViewById<android.widget.LinearLayout>(R.id.sendsBlockRow)
         sendsRow.removeAllViews()
-        val sendViews = arrayOfNulls<Pair<SeekBar, TextView>>(16)
+        val sendViews = arrayOfNulls<Pair<FaderView, TextView>>(16)
         val sendsData = ConnectionHolder.channelData[channel]
         for (bus in 1..16) {
             val column = android.widget.LinearLayout(this).apply {
@@ -3092,67 +3008,50 @@ class MainActivity : AppCompatActivity() {
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
                 )
             }
-            // Вертикальный фейдер на всю доступную высоту - та же техника
-            // подгонки под реальную высоту экрана, что и везде в приложении.
+            // Вертикальный фейдер на всю доступную высоту - FaderView
+            // рисует себя сам, без трюка с поворотом и подгонкой ширины.
             val faderContainer = android.widget.FrameLayout(this).apply {
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
                 )
             }
-            val seek = SeekBar(this).apply {
-                max = 1000
-                progress = (sendsData.auxSends[bus - 1] * 1000).toInt()
-                progressTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#ff9f0a"))
-                thumbTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#ffffff"))
-                rotation = 270f
-                layoutParams = android.widget.FrameLayout.LayoutParams(220, 60, android.view.Gravity.CENTER)
+            val seek = FaderView(this).apply {
+                value = sendsData.auxSends[bus - 1]
+                // MATCH_PARENT растягивал фейдер на всю ширину колонки
+                // (86dp) - колпачок получался огромным. Фиксированная
+                // ширина, как у обычных фейдеров каналов.
+                layoutParams = android.widget.FrameLayout.LayoutParams(
+                    (32 * resources.displayMetrics.density).toInt(),
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                    android.view.Gravity.CENTER
+                )
             }
             faderContainer.addView(seek)
-            faderContainer.viewTreeObserver.addOnGlobalLayoutListener(
-                object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
-                    override fun onGlobalLayout() {
-                        val h = faderContainer.height
-                        if (h > 0) {
-                            val p = seek.layoutParams
-                            if (p.width != h) {
-                                p.width = h
-                                seek.layoutParams = p
-                            }
-                            faderContainer.viewTreeObserver.removeOnGlobalLayoutListener(this)
-                        }
-                    }
-                }
-            )
             var lastSend = 0L
-            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val level = progress / 1000f
-                    valueText.text = "%.2f".format(level)
-                    if (!fromUser) return
-                    sendsData.auxSends[bus - 1] = level
-                    val now = System.currentTimeMillis()
-                    if (now - lastSend >= minSendIntervalMs) {
-                        lastSend = now
-                        sendSubSend(channel, bus, level)
-                    }
-                }
-                override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) {
-                    val level = (sb?.progress ?: 0) / 1000f
-                    sendsData.auxSends[bus - 1] = level
+            seek.onValueChanged = { level ->
+                valueText.text = "%.2f".format(level)
+                sendsData.auxSends[bus - 1] = level
+                val now = System.currentTimeMillis()
+                if (now - lastSend >= minSendIntervalMs) {
+                    lastSend = now
                     sendSubSend(channel, bus, level)
                 }
-            })
+            }
+            seek.onDragFinished = { level ->
+                sendsData.auxSends[bus - 1] = level
+                sendSubSend(channel, bus, level)
+            }
 
             // Отдельно от уровня посыла - ПОДТВЕРЖДЕНО реальным захватом.
             val btnPreFade = Button(this).apply {
+                setBackgroundResource(R.drawable.console_button_background)
                 backgroundTintList = null
                 minHeight = 0
                 textSize = 10f
                 setPadding(4, 4, 4, 4)
                 text = if (sendsData.auxSendPreFade[bus - 1]) "PRE" else "POST"
                 setTextColor(Color.parseColor("#ffffff"))
-                setBackgroundColor(Color.parseColor("#3a3a3c"))
+                backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
@@ -3165,13 +3064,14 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             val btnEnable = Button(this).apply {
+                setBackgroundResource(R.drawable.console_button_background)
                 backgroundTintList = null
                 minHeight = 0
                 textSize = 10f
                 setPadding(4, 4, 4, 4)
                 text = if (sendsData.auxSendEnable[bus - 1]) "ON" else "OFF"
                 setTextColor(Color.parseColor("#ffffff"))
-                setBackgroundColor(Color.parseColor(if (sendsData.auxSendEnable[bus - 1]) "#34c759" else "#3a3a3c"))
+                backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (sendsData.auxSendEnable[bus - 1]) "#34c759" else "#3a3a3c"))
                 layoutParams = android.widget.LinearLayout.LayoutParams(
                     android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                     android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
@@ -3180,7 +3080,7 @@ class MainActivity : AppCompatActivity() {
                     val newState = !ConnectionHolder.channelData[channel].auxSendEnable[bus - 1]
                     ConnectionHolder.channelData[channel].auxSendEnable[bus - 1] = newState
                     text = if (newState) "ON" else "OFF"
-                    setBackgroundColor(Color.parseColor(if (newState) "#34c759" else "#3a3a3c"))
+                    backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) "#34c759" else "#3a3a3c"))
                     sendRawAsync(Pro2Commands.setSubSendEnable(channel, bus, true))
                 }
             }
@@ -3194,7 +3094,7 @@ class MainActivity : AppCompatActivity() {
             sendViews[bus - 1] = seek to valueText
         }
         @Suppress("UNCHECKED_CAST")
-        detailSendViews = sendViews as Array<Pair<SeekBar, TextView>>
+        detailSendViews = sendViews as Array<Pair<FaderView, TextView>>
 
         // --- Вкладка COMP: строится программно (сетка ручек + график) ---
         compBlock.removeAllViews()
@@ -3238,24 +3138,24 @@ class MainActivity : AppCompatActivity() {
         val btnPhantom = view.findViewById<Button>(R.id.btnDetailPhantom)
         btnPhantom.backgroundTintList = null
         btnPhantom.text = if (inputData.phantomLocal) "48V ON" else "48V OFF"
-        btnPhantom.setBackgroundColor(Color.parseColor(if (inputData.phantomLocal) "#ff9f0a" else "#3a3a3c"))
+        btnPhantom.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (inputData.phantomLocal) "#ff9f0a" else "#3a3a3c"))
         btnPhantom.setOnClickListener {
             val newState = !ConnectionHolder.channelData[channel].phantomLocal
             ConnectionHolder.channelData[channel].phantomLocal = newState
             btnPhantom.text = if (newState) "48V ON" else "48V OFF"
-            btnPhantom.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+            btnPhantom.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
             sendPhantomPower(channel, newState)
         }
 
         val btnPhase = view.findViewById<Button>(R.id.btnDetailPhase)
         btnPhase.backgroundTintList = null
         btnPhase.text = if (inputData.phaseLocal) "PHASE INV" else "PHASE NORM"
-        btnPhase.setBackgroundColor(Color.parseColor(if (inputData.phaseLocal) "#ff9f0a" else "#3a3a3c"))
+        btnPhase.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (inputData.phaseLocal) "#ff9f0a" else "#3a3a3c"))
         btnPhase.setOnClickListener {
             val newState = !ConnectionHolder.channelData[channel].phaseLocal
             ConnectionHolder.channelData[channel].phaseLocal = newState
             btnPhase.text = if (newState) "PHASE INV" else "PHASE NORM"
-            btnPhase.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+            btnPhase.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
             sendPhase(channel, newState)
         }
 
@@ -3263,12 +3163,12 @@ class MainActivity : AppCompatActivity() {
         val btnLink = view.findViewById<Button>(R.id.btnDetailLink)
         btnLink.backgroundTintList = null
         btnLink.text = if (inputData.linkedLocal) "LINK ON" else "LINK OFF"
-        btnLink.setBackgroundColor(Color.parseColor(if (inputData.linkedLocal) "#ff9f0a" else "#3a3a3c"))
+        btnLink.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (inputData.linkedLocal) "#ff9f0a" else "#3a3a3c"))
         btnLink.setOnClickListener {
             val newState = !ConnectionHolder.channelData[channel].linkedLocal
             ConnectionHolder.channelData[channel].linkedLocal = newState
             btnLink.text = if (newState) "LINK ON" else "LINK OFF"
-            btnLink.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+            btnLink.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
             sendRawAsync(Pro2Commands.setLink(channel, true))
         }
         detailLinkButton = btnLink
@@ -3345,12 +3245,12 @@ class MainActivity : AppCompatActivity() {
         val btnHp = view.findViewById<Button>(R.id.btnDetailHpFilterIn)
         btnHp.backgroundTintList = null
         btnHp.text = if (inputData.hpFilterInLocal) "HP FILTER ON" else "HP FILTER OFF"
-        btnHp.setBackgroundColor(Color.parseColor(if (inputData.hpFilterInLocal) "#ff9f0a" else "#3a3a3c"))
+        btnHp.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (inputData.hpFilterInLocal) "#ff9f0a" else "#3a3a3c"))
         btnHp.setOnClickListener {
             val newState = !ConnectionHolder.channelData[channel].hpFilterInLocal
             ConnectionHolder.channelData[channel].hpFilterInLocal = newState
             btnHp.text = if (newState) "HP FILTER ON" else "HP FILTER OFF"
-            btnHp.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+            btnHp.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
             sendRawAsync(Pro2Commands.setHpFilterIn(channel, true))
         }
         detailHpFilterInButton = btnHp
@@ -3358,12 +3258,12 @@ class MainActivity : AppCompatActivity() {
         val btnLp = view.findViewById<Button>(R.id.btnDetailLpFilterIn)
         btnLp.backgroundTintList = null
         btnLp.text = if (inputData.lpFilterInLocal) "LP FILTER ON" else "LP FILTER OFF"
-        btnLp.setBackgroundColor(Color.parseColor(if (inputData.lpFilterInLocal) "#ff9f0a" else "#3a3a3c"))
+        btnLp.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (inputData.lpFilterInLocal) "#ff9f0a" else "#3a3a3c"))
         btnLp.setOnClickListener {
             val newState = !ConnectionHolder.channelData[channel].lpFilterInLocal
             ConnectionHolder.channelData[channel].lpFilterInLocal = newState
             btnLp.text = if (newState) "LP FILTER ON" else "LP FILTER OFF"
-            btnLp.setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+            btnLp.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
             sendRawAsync(Pro2Commands.setLpFilterIn(channel, true))
         }
         detailLpFilterInButton = btnLp
@@ -3464,15 +3364,16 @@ class MainActivity : AppCompatActivity() {
 
         // --- Заголовок: EQ IN ---
         val eqInButton = Button(this).apply {
+            setBackgroundResource(R.drawable.console_button_background)
             backgroundTintList = null
             text = if (data.eqInLocal) "EQ ON" else "EQ OFF"
             setTextColor(Color.parseColor("#ffffff"))
-            setBackgroundColor(Color.parseColor(if (data.eqInLocal) "#ff9f0a" else "#3a3a3c"))
+            backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (data.eqInLocal) "#ff9f0a" else "#3a3a3c"))
             setOnClickListener {
                 val newState = !ConnectionHolder.channelData[channel].eqInLocal
                 ConnectionHolder.channelData[channel].eqInLocal = newState
                 text = if (newState) "EQ ON" else "EQ OFF"
-                setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+                backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
                 sendEqIn(channel)
             }
         }
@@ -3506,37 +3407,39 @@ class MainActivity : AppCompatActivity() {
             orientation = android.widget.LinearLayout.HORIZONTAL
         }
         val hpButton = Button(this).apply {
+            setBackgroundResource(R.drawable.console_button_background)
             backgroundTintList = null
             minHeight = 0
             textSize = 11f
             text = if (data.hpFilterInLocal) "HPF ON" else "HPF OFF"
             setTextColor(Color.parseColor("#ffffff"))
-            setBackgroundColor(Color.parseColor(if (data.hpFilterInLocal) "#34c759" else "#3a3a3c"))
+            backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (data.hpFilterInLocal) "#34c759" else "#3a3a3c"))
             layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 .apply { marginEnd = 6 }
             setOnClickListener {
                 val newState = !ConnectionHolder.channelData[channel].hpFilterInLocal
                 ConnectionHolder.channelData[channel].hpFilterInLocal = newState
                 text = if (newState) "HPF ON" else "HPF OFF"
-                setBackgroundColor(Color.parseColor(if (newState) "#34c759" else "#3a3a3c"))
+                backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) "#34c759" else "#3a3a3c"))
                 graph.hpOn = newState
                 graph.invalidate()
                 sendRawAsync(Pro2Commands.setHpFilterIn(channel, true))
             }
         }
         val lpButton = Button(this).apply {
+            setBackgroundResource(R.drawable.console_button_background)
             backgroundTintList = null
             minHeight = 0
             textSize = 11f
             text = if (data.lpFilterInLocal) "LPF ON" else "LPF OFF"
             setTextColor(Color.parseColor("#ffffff"))
-            setBackgroundColor(Color.parseColor(if (data.lpFilterInLocal) "#af52de" else "#3a3a3c"))
+            backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (data.lpFilterInLocal) "#af52de" else "#3a3a3c"))
             layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 val newState = !ConnectionHolder.channelData[channel].lpFilterInLocal
                 ConnectionHolder.channelData[channel].lpFilterInLocal = newState
                 text = if (newState) "LPF ON" else "LPF OFF"
-                setBackgroundColor(Color.parseColor(if (newState) "#af52de" else "#3a3a3c"))
+                backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) "#af52de" else "#3a3a3c"))
                 graph.lpOn = newState
                 graph.invalidate()
                 sendRawAsync(Pro2Commands.setLpFilterIn(channel, true))
@@ -3602,6 +3505,7 @@ class MainActivity : AppCompatActivity() {
                 )
             }
             val activeButton = Button(this).apply {
+                setBackgroundResource(R.drawable.console_button_background)
                 text = if (data.eqBandActiveLocal[bandIndex]) "ON" else "OFF"
                 textSize = 10f
                 minHeight = 0
@@ -3609,12 +3513,12 @@ class MainActivity : AppCompatActivity() {
                 backgroundTintList = null
                 setPadding(16, 4, 16, 4)
                 setTextColor(Color.parseColor("#ffffff"))
-                setBackgroundColor(Color.parseColor(if (data.eqBandActiveLocal[bandIndex]) "#ff9f0a" else "#3a3a3c"))
+                backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (data.eqBandActiveLocal[bandIndex]) "#ff9f0a" else "#3a3a3c"))
                 setOnClickListener {
                     val newState = !ConnectionHolder.channelData[channel].eqBandActiveLocal[bandIndex]
                     ConnectionHolder.channelData[channel].eqBandActiveLocal[bandIndex] = newState
                     text = if (newState) "ON" else "OFF"
-                    setBackgroundColor(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
+                    backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) "#ff9f0a" else "#3a3a3c"))
                     graph.bands[bandIndex].active = newState
                     graph.invalidate()
                     sendEqBandActive(channel, band)
@@ -3630,6 +3534,7 @@ class MainActivity : AppCompatActivity() {
             if (bandIndex == 0 || bandIndex == 3) {
                 val initialMode = if (bandIndex == 0) data.eqBassShapeMode else data.eqTrebleShapeMode
                 val shapeButton = Button(this).apply {
+                    setBackgroundResource(R.drawable.console_button_background)
                     text = eqShapeModeLabel(initialMode)
                     textSize = 10f
                     minHeight = 0
@@ -3637,7 +3542,7 @@ class MainActivity : AppCompatActivity() {
                     backgroundTintList = null
                     setPadding(12, 4, 12, 4)
                     setTextColor(Color.parseColor("#ffffff"))
-                    setBackgroundColor(Color.parseColor("#3a3a3c"))
+                    backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
                     setOnClickListener {
                         val d = ConnectionHolder.channelData[channel]
                         // Локально оптимистично прокручиваем на следующий
@@ -3783,10 +3688,11 @@ class MainActivity : AppCompatActivity() {
         }
         val inLocal = if (isGate) data.gateInLocal else data.compInLocal
         val inButton = Button(this).apply {
+            setBackgroundResource(R.drawable.console_button_background)
             text = if (inLocal) "IN ●" else "IN ○"
             backgroundTintList = null
             setTextColor(if (inLocal) accent else Color.parseColor("#8e8e93"))
-            setBackgroundColor(Color.parseColor("#2c2c2e"))
+            backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#2c2c2e"))
             setOnClickListener {
                 val d = ConnectionHolder.channelData[channel]
                 if (isGate) {
@@ -3931,23 +3837,24 @@ class MainActivity : AppCompatActivity() {
         // --- Переключатель фильтра (есть и у gate, и у comp) ---
         val filtersInLocal = if (isGate) data.gateFiltersInLocal else data.compFiltersInLocal
         val filtersInButton = Button(this).apply {
+            setBackgroundResource(R.drawable.console_button_background)
             backgroundTintList = null
             text = if (filtersInLocal) "FILTER ON" else "FILTER OFF"
             setTextColor(Color.parseColor("#ffffff"))
-            setBackgroundColor(Color.parseColor(if (filtersInLocal) accentHex else "#3a3a3c"))
+            backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (filtersInLocal) accentHex else "#3a3a3c"))
             setOnClickListener {
                 val d = ConnectionHolder.channelData[channel]
                 if (isGate) {
                     val newState = !d.gateFiltersInLocal
                     d.gateFiltersInLocal = newState
                     text = if (newState) "FILTER ON" else "FILTER OFF"
-                    setBackgroundColor(Color.parseColor(if (newState) accentHex else "#3a3a3c"))
+                    backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) accentHex else "#3a3a3c"))
                     sendGateFiltersIn(channel, newState)
                 } else {
                     val newState = !d.compFiltersInLocal
                     d.compFiltersInLocal = newState
                     text = if (newState) "FILTER ON" else "FILTER OFF"
-                    setBackgroundColor(Color.parseColor(if (newState) accentHex else "#3a3a3c"))
+                    backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (newState) accentHex else "#3a3a3c"))
                     sendRawAsync(Pro2Commands.setCompFiltersIn(channel, true))
                 }
             }
@@ -4089,14 +3996,14 @@ class MainActivity : AppCompatActivity() {
         ConnectionHolder.channelData[channel].phantomLocal = on
         if (openDetailChannel != channel) return
         detailPhantomButton?.text = if (on) "48V ON" else "48V OFF"
-        detailPhantomButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+        detailPhantomButton?.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
     }
 
     private fun updatePhaseUi(channel: Int, on: Boolean) {
         ConnectionHolder.channelData[channel].phaseLocal = on
         if (openDetailChannel != channel) return
         detailPhaseButton?.text = if (on) "PHASE INV" else "PHASE NORM"
-        detailPhaseButton?.setBackgroundColor(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
+        detailPhaseButton?.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (on) "#ff9f0a" else "#3a3a3c"))
     }
 
     /** Общее обновление живого виджета сетки (используется и для COMP, и для GATE). */
@@ -4121,7 +4028,7 @@ class MainActivity : AppCompatActivity() {
         if (openDetailChannel != channel) return
         val views = detailGateDynViews ?: return
         views.filtersInButton?.text = if (on) "FILTER ON" else "FILTER OFF"
-        views.filtersInButton?.setBackgroundColor(Color.parseColor(if (on) "#34c759" else "#3a3a3c"))
+        views.filtersInButton?.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (on) "#34c759" else "#3a3a3c"))
     }
 
     private fun updateGateParamUi(channel: Int, kind: ParamKind, level: Float) {
@@ -4148,7 +4055,7 @@ class MainActivity : AppCompatActivity() {
 
         if (openDetailChannel == channel) {
             val dv = detailViews ?: return
-            dv.fader.progress = (level.coerceIn(0f, 1f) * 1000).toInt()
+            dv.fader.value = level.coerceIn(0f, 1f)
             dv.levelText.text = formatFaderDb(level)
         }
     }
@@ -4157,11 +4064,11 @@ class MainActivity : AppCompatActivity() {
         ConnectionHolder.channelData[channel].mutedLocal = muted
         val ui = channels.getOrNull(channel) ?: return
         ui.mutedLocal = muted
-        ui.muteButton.setBackgroundColor(
+        ui.muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(
             Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c")
         )
         if (openDetailChannel == channel) {
-            detailViews?.muteButton?.setBackgroundColor(
+            detailViews?.muteButton?.backgroundTintList = android.content.res.ColorStateList.valueOf(
                 Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c")
             )
         }
@@ -4172,7 +4079,7 @@ class MainActivity : AppCompatActivity() {
         val ui = channels.getOrNull(channel) ?: return
         ui.suppressEvents = true
         ui.soloButton.isChecked = soloed
-        ui.soloButton.setBackgroundColor(
+        ui.soloButton.backgroundTintList = android.content.res.ColorStateList.valueOf(
             Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c")
         )
         ui.suppressEvents = false
@@ -4180,7 +4087,7 @@ class MainActivity : AppCompatActivity() {
         if (openDetailChannel == channel) {
             val dv = detailViews ?: return
             dv.soloButton.isChecked = soloed
-            dv.soloButton.setBackgroundColor(
+            dv.soloButton.backgroundTintList = android.content.res.ColorStateList.valueOf(
                 Color.parseColor(if (soloed) "#ff9f0a" else "#3a3a3c")
             )
         }

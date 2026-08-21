@@ -133,6 +133,7 @@
                 android:id="@+id/groupDetailSolo"
                 android:layout_width="match_parent"
                 android:layout_height="30dp"
+                android:background="@drawable/console_button_background"
                 android:layout_marginStart="4dp"
                 android:layout_marginEnd="4dp"
                 android:textOn="SOLO"
@@ -144,6 +145,7 @@
                 android:id="@+id/groupDetailMute"
                 android:layout_width="match_parent"
                 android:layout_height="30dp"
+                android:background="@drawable/console_button_background"
                 android:layout_marginStart="4dp"
                 android:layout_marginEnd="4dp"
                 android:layout_marginTop="6dp"
@@ -158,6 +160,7 @@
                 android:id="@+id/groupDetailLink"
                 android:layout_width="match_parent"
                 android:layout_height="26dp"
+                android:background="@drawable/console_button_background"
                 android:layout_marginStart="4dp"
                 android:layout_marginEnd="4dp"
                 android:layout_marginTop="6dp"
@@ -187,22 +190,10 @@
                         android:scaleY="0" />
                 </FrameLayout>
 
-                <FrameLayout
-                    android:id="@+id/groupDetailFaderContainer"
-                    android:layout_width="28dp"
-                    android:layout_height="match_parent">
-
-                    <SeekBar
-                        android:id="@+id/groupDetailFader"
-                        android:layout_width="220dp"
-                        android:layout_height="28dp"
-                        android:layout_gravity="center"
-                        android:max="1000"
-                        android:progress="0"
-                        android:progressTint="#ff9f0a"
-                        android:thumbTint="#ffffff"
-                        android:rotation="270" />
-                </FrameLayout>
+                <com.example.midasfadercontrol.FaderView
+                    android:id="@+id/groupDetailFader"
+                    android:layout_width="34dp"
+                    android:layout_height="match_parent" />
             </LinearLayout>
 
             <TextView
