@@ -5,35 +5,40 @@ import android.graphics.Color
 import android.os.Bundle
 import android.widget.Button
 import androidx.appcompat.app.AppCompatActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * Чёрные системные рамки (статус-бар сверху, навигация снизу) - общая для
- * всех экранов приложения (раньше это было только в MainActivity.onCreate,
- * из-за чего самый первый экран - выбор роли - оставался со стандартными,
- * не всегда тёмными системными рамками). Работает одинаково в любой
- * ориентации - вызывается один раз при создании активности.
+ * всех экранов приложения. Используется WindowInsetsControllerCompat из
+ * androidx.core - устаревшие systemUiVisibility-флаги на некоторых
+ * устройствах/оболочках (например Samsung One UI) срабатывали не всегда
+ * надёжно.
  */
 internal fun AppCompatActivity.applyBlackSystemBars() {
     window.statusBarColor = Color.BLACK
     window.navigationBarColor = Color.BLACK
-    @Suppress("DEPRECATION")
-    window.decorView.systemUiVisibility = window.decorView.systemUiVisibility and
-        android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv() and
-        android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
+    val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+    controller.isAppearanceLightStatusBars = false
+    controller.isAppearanceLightNavigationBars = false
 }
 
 /**
- * Единственная launcher-активность приложения. Раньше было ДВА отдельных
- * значка (Midas Fader Control / Midas Monitor) с разными taskAffinity -
- * из-за этого оба режима иногда запускались ОДНОВРЕМЕННО с одного и того
- * же телефона (один IP), а пульт умеет отвечать только ОДНОМУ клиенту на
- * IP-адрес - при двух активных подключениях с одного IP пульт путался,
- * куда слать ответы, и мониторный режим переставал получать live-данные
- * (подтверждено реальным захватом трафика).
+ * Выбор режима (инженер/музыкант) - ВТОРОЙ экран в цепочке (после
+ * ConnectActivity, где уже установлено соединение с пультом). Само
+ * соединение сюда не относится - просто передаём выбранный режим в
+ * MainActivity через Intent extra, MainActivity переиспользует уже живой
+ * сокет (см. MainActivity.beginModeSession()).
  *
- * Теперь один вход, дальше выбор роли - MainActivity просто получает режим
- * через Intent extra и либо строит полный интерфейс инженера, либо
- * упрощённый мониторный, используя ОДНО и то же подключение (порт 10001).
+ * ВАЖНО про полное отключение: пока пользователь просто переключается
+ * между инженерным и мониторным режимом (MainActivity -> назад -> сюда ->
+ * другой режим), соединение остаётся живым - MainActivity.onDestroy()
+ * теперь делает только ЛЁГКую отписку (см. заметку там). Полное
+ * отключение (закрытие сокета, сброс ConnectionHolder) происходит здесь,
+ * в onDestroy() ЭТОЙ активности - то есть когда пользователь уходит даже
+ * отсюда (например, кнопкой "назад" возвращается к экрану подключения,
+ * или полностью закрывает приложение).
  */
 class RoleSelectActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,5 +57,45 @@ class RoleSelectActivity : AppCompatActivity() {
                 putExtra(MainActivity.EXTRA_APP_MODE, MainActivity.MODE_MONITOR)
             })
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (!isFinishing) return // пересоздание из-за поворота экрана и т.п. - ничего не трогаем
+
+        // Пользователь ушёл даже отсюда (не просто выбирает режим) -
+        // самое время по-настоящему отключиться: отписаться от всего, что
+        // ещё могло остаться подписанным (например, если предыдущий режим
+        // не успел корректно завершить свою лёгкую отписку), закрыть
+        // сокет, сбросить состояние. Наилучшее усилие - см. ту же заметку
+        // в MainActivity про best-effort отписку.
+        val s = ConnectionHolder.socket
+        val addr = ConnectionHolder.consoleAddress
+        val prt = ConnectionHolder.consolePort
+        if (s != null && addr != null) {
+            val handles = mutableListOf<String>()
+            handles.addAll(ConnectionHolder.subscriptions.keys)
+            handles.addAll(ConnectionHolder.masterSubscriptions.keys)
+            handles.addAll(ConnectionHolder.auxSubscriptions.keys)
+            handles.addAll(ConnectionHolder.auxBusSubscriptions.keys)
+            handles.addAll(ConnectionHolder.vcaSubscriptions.keys)
+            handles.addAll(ConnectionHolder.mainOutSubscriptions.keys)
+            handles.addAll(ConnectionHolder.vcaMemberSubscriptions.keys)
+            CoroutineScope(Dispatchers.IO).launch {
+                for (handle in handles) {
+                    try {
+                        val packet = Pro2Commands.unsubscribe(handle)
+                        val dp = java.net.DatagramPacket(packet, packet.size, addr, prt)
+                        s.send(dp)
+                    } catch (e: Exception) {
+                        break
+                    }
+                }
+                s.close()
+            }
+        } else {
+            s?.close()
+        }
+        ConnectionHolder.reset()
     }
 }

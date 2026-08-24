@@ -154,20 +154,52 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Переиспользует УЖЕ ЖИВОЕ соединение (сокет создан в ConnectActivity,
+     * либо остался от предыдущего режима при переключении инженер<->
+     * монитор) - НЕ пересоздаёт сокет, только запускает приём/опрос и
+     * подписывается под конкретный режим. Раньше каждое переключение
+     * режима означало полную пересборку сокета + подписки с нуля - тяжело
+     * для пульта, судя по всему, задевало и официальный Mixtender.
+     */
+    private fun beginModeSession() {
+        val existingSocket = socket
+        val existingAddress = consoleAddress
+        if (existingSocket == null || existingAddress == null) {
+            // Защитный случай - при обычной навигации через ConnectActivity
+            // такого быть не должно, но на всякий случай не падаем, а
+            // просто оставляем форму подключения видимой (её и на этих
+            // экранах уже нет, но подстрахуемся, показав ошибку в статусе).
+            textStatus.text = "Нет соединения - вернитесь на экран подключения"
+            return
+        }
+        val port = consolePort
+        textConnectionStatus.text = "● Connected"
+        textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
+        textStatus.text = "Subscribing to live updates..."
+        collapseConnectForm()
+
+        startReceiveLoop(existingSocket)
+        CoroutineScope(Dispatchers.IO).launch {
+            if (appMode == MODE_MONITOR) {
+                subscribeMonitorEssentials(existingSocket, existingAddress, port)
+            } else {
+                requestInitialState(existingSocket, existingAddress, port)
+            }
+            subscribedAlready = true
+            if (sessionToken == null) sessionToken = 0
+            if (appMode != MODE_MONITOR) {
+                subscribeAll()
+            }
+            startPollLoop(existingSocket, existingAddress, port)
+        }
+    }
+
     private fun onCreateEngineer() {
         setContentView(R.layout.activity_main)
 
-        editHost = findViewById(R.id.editHost)
-        editPort = findViewById(R.id.editPort)
-        btnConnect = findViewById(R.id.btnConnect)
         textStatus = findViewById(R.id.textStatus)
         textConnectionStatus = findViewById(R.id.textConnectionStatus)
-        containerConnectForm = findViewById(R.id.containerConnectForm)
-        btnChangeConnection = findViewById(R.id.btnChangeConnection)
-        btnChangeConnection?.setOnClickListener {
-            containerConnectForm?.visibility = android.view.View.VISIBLE
-            btnChangeConnection?.visibility = android.view.View.GONE
-        }
         containerChannels = findViewById(R.id.containerChannels)
         channelDetailContainer = findViewById(R.id.channelDetailContainer)
 
@@ -181,27 +213,31 @@ class MainActivity : AppCompatActivity() {
         buildModeButtons()
         setupGlobalTapButton()
 
-        btnConnect.setOnClickListener { connectAndSync() }
-
-        // Если сокет уже есть - значит, это не холодный старт, а пересоздание
-        // Activity (например, из-за поворота экрана). Соединение и подписки
-        // на пульт уже живы в ConnectionHolder - просто восстанавливаем
-        // экран из уже накопленных данных и запускаем приём заново (старый
-        // receiveJob/pollJob были привязаны к уже уничтоженному экземпляру
-        // Activity и их нужно перезапустить на новом, БЕЗ пересоздания
-        // самого сокета - пульт даже не заметит, что происходит).
+        // Соединение теперь ВСЕГДА уже готово к этому моменту (см.
+        // ConnectActivity) - осталось различить два случая:
+        // 1) subscribedAlready == true - это пересоздание Activity из-за
+        //    поворота экрана (этот же режим уже был подписан раньше) -
+        //    просто восстанавливаем экран из накопленных данных.
+        // 2) subscribedAlready == false - свежий вход в инженерный режим
+        //    на уже живом соединении (после ConnectActivity, либо только
+        //    что переключились сюда из мониторного режима) - нужно
+        //    подписаться под этот режим впервые.
         val existingSocket = socket
         val existingAddress = consoleAddress
         if (existingSocket != null && existingAddress != null) {
-            receiveJob?.cancel()
-            pollJob?.cancel()
-            textConnectionStatus.text = "● Connected"
-            textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
-            textStatus.text = "Connection restored after screen rotation"
-            collapseConnectForm()
-            restoreUiFromChannelData()
-            startReceiveLoop(existingSocket)
-            startPollLoop(existingSocket, existingAddress, consolePort)
+            if (subscribedAlready) {
+                receiveJob?.cancel()
+                pollJob?.cancel()
+                textConnectionStatus.text = "● Connected"
+                textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
+                textStatus.text = "Connection restored after screen rotation"
+                collapseConnectForm()
+                restoreUiFromChannelData()
+                startReceiveLoop(existingSocket)
+                startPollLoop(existingSocket, existingAddress, consolePort)
+            } else {
+                beginModeSession()
+            }
         }
     }
 
@@ -236,6 +272,7 @@ class MainActivity : AppCompatActivity() {
     // LINK-кнопка и кнопки cycle-режимов (STYLE/FILTER BANDWIDTH/KNEE) на
     // общем экране деталей - для live-обновления, пока экран открыт.
     private var groupDetailLinkButton: Button? = null
+    private var groupDetailMeterBarRef: android.view.View? = null
     private val groupDetailCycleButtons = mutableMapOf<String, Button>()
     private var monitorChannelLabels: Array<TextView?> = arrayOfNulls(56)
     private val monitorBankButtons = mutableListOf<Button>()
@@ -244,30 +281,27 @@ class MainActivity : AppCompatActivity() {
     private fun onCreateMonitor() {
         setContentView(R.layout.activity_monitor_connect)
 
-        editHost = findViewById(R.id.editHost)
-        editPort = findViewById(R.id.editPort)
-        btnConnect = findViewById(R.id.btnConnect)
         textStatus = findViewById(R.id.textStatus)
         textConnectionStatus = findViewById(R.id.textConnectionStatus)
 
-        btnConnect.setOnClickListener {
-            connectAndSync()
-            // Список шин будет заполняться по мере прихода имён (см.
-            // updateAuxBusNameForMonitorList, вызывается из уже
-            // существующего разбора ParamKind.NAME для aux-шин).
-            findViewById<android.widget.LinearLayout>(R.id.containerBuses).postDelayed(
-                { buildMonitorBusList() }, 800
-            )
-        }
-
-        // Восстановление после поворота экрана - если уже подключены,
-        // сразу показываем список шин (или экран выбранной шины).
-        if (socket != null) {
+        // Соединение теперь ВСЕГДА уже готово к этому моменту (см.
+        // ConnectActivity) - та же логика, что в onCreateEngineer:
+        // subscribedAlready==true значит поворот экрана (просто
+        // восстанавливаем), false значит свежий вход в мониторный режим
+        // на уже живом соединении - нужно подписаться впервые.
+        if (socket != null && consoleAddress != null) {
             textConnectionStatus.text = "● Connected"
             textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
-            buildMonitorBusList()
-            if (ConnectionHolder.uiMonitorSelectedBus >= 0) {
-                openMonitorBus(ConnectionHolder.uiMonitorSelectedBus)
+            if (subscribedAlready) {
+                buildMonitorBusList()
+                if (ConnectionHolder.uiMonitorSelectedBus >= 0) {
+                    openMonitorBus(ConnectionHolder.uiMonitorSelectedBus)
+                }
+            } else {
+                beginModeSession()
+                findViewById<android.widget.LinearLayout>(R.id.containerBuses).postDelayed(
+                    { buildMonitorBusList() }, 800
+                )
             }
         }
     }
@@ -1360,6 +1394,15 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+            ParamKind.CHANNEL_SOURCE -> {
+                if (blob.size >= 4) {
+                    val raw = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+                    ConnectionHolder.channelData[sub.channel].channelSource = raw
+                    if (openDetailChannel == sub.channel) {
+                        detailChannelSourceText?.text = "SOURCE: $raw"
+                    }
+                }
+            }
             ParamKind.GATE_MODE -> {
                 if (blob.size >= 4) {
                     val mode = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
@@ -1796,6 +1839,17 @@ class MainActivity : AppCompatActivity() {
             else -> "#34c759"
         }
         ui.meterBar.setBackgroundColor(Color.parseColor(color))
+
+        // Если сейчас открыт экран деталей ИМЕННО этой aux-шины/Main Out -
+        // синхронизируем и его метр. Раньше этого не было вообще - метр в
+        // group_detail.xml никогда не обновлялся никакими push-данными.
+        val kind = if (list === auxBusStrips) "aux" else if (list === mainOutStrips) "mainout" else null
+        if (kind != null && openGroupDetailKind == kind && openGroupDetailIndex == index) {
+            groupDetailMeterBarRef?.let { mb ->
+                applyMeterHeight(mb, level)
+                mb.setBackgroundColor(Color.parseColor(color))
+            }
+        }
     }
 
     /** Общая функция для обновления Solo B у master/aux returns/aux-шин (все используют SimpleStripUi). */
@@ -1932,6 +1986,7 @@ class MainActivity : AppCompatActivity() {
     private var detailPhantomButton: Button? = null
     private var detailPhaseButton: Button? = null
     private var detailLinkButton: Button? = null
+    private var detailChannelSourceText: TextView? = null
     private var detailHpFilterInButton: Button? = null
     private var detailLpFilterInButton: Button? = null
     private var detailHpFreqSeek: SeekBar? = null
@@ -2502,6 +2557,7 @@ class MainActivity : AppCompatActivity() {
             openGroupDetailIndex = null
             groupDetailKnobs.clear()
             groupDetailLinkButton = null
+            groupDetailMeterBarRef = null
             groupDetailCycleButtons.clear()
         }
 
@@ -2509,6 +2565,7 @@ class MainActivity : AppCompatActivity() {
         val soloBtn = view.findViewById<ToggleButton>(R.id.groupDetailSolo)
         val fader = view.findViewById<FaderView>(R.id.groupDetailFader)
         val meterBar = view.findViewById<android.view.View>(R.id.groupDetailMeterBar)
+        groupDetailMeterBarRef = meterBar
         setupMeterBarPivot(meterBar)
         val levelText = view.findViewById<TextView>(R.id.textGroupDetailLevelValue)
 
@@ -2595,6 +2652,7 @@ class MainActivity : AppCompatActivity() {
             openGroupDetailIndex = null
             groupDetailKnobs.clear()
             groupDetailLinkButton = null
+            groupDetailMeterBarRef = null
             groupDetailCycleButtons.clear()
         }
 
@@ -2602,6 +2660,7 @@ class MainActivity : AppCompatActivity() {
         val soloBtn = view.findViewById<ToggleButton>(R.id.groupDetailSolo)
         val fader = view.findViewById<FaderView>(R.id.groupDetailFader)
         val meterBar = view.findViewById<android.view.View>(R.id.groupDetailMeterBar)
+        groupDetailMeterBarRef = meterBar
         setupMeterBarPivot(meterBar)
         val levelText = view.findViewById<TextView>(R.id.textGroupDetailLevelValue)
 
@@ -2787,6 +2846,7 @@ class MainActivity : AppCompatActivity() {
             detailGainTrimValueRef = null
             detailSoloBRef = null
             detailLinkButton = null
+            detailChannelSourceText = null
             detailGateDynViews = null
         }
 
@@ -3180,6 +3240,12 @@ class MainActivity : AppCompatActivity() {
             sendRawAsync(Pro2Commands.setLink(channel, true))
         }
         detailLinkButton = btnLink
+
+        // Патчинг - только чтение, см. заметку в XML/Pro2Commands.kt.
+        val textSource = view.findViewById<TextView>(R.id.textDetailChannelSource)
+        val currentSource = ConnectionHolder.channelData[channel].channelSource
+        textSource.text = if (currentSource >= 0) "SOURCE: $currentSource" else "SOURCE: —"
+        detailChannelSourceText = textSource
 
         val seekPan = view.findViewById<SeekBar>(R.id.seekDetailPan)
         val textPan = view.findViewById<TextView>(R.id.textDetailPanValue)
@@ -4517,6 +4583,7 @@ class MainActivity : AppCompatActivity() {
             detailGainTrimValueRef = null
             detailSoloBRef = null
             detailLinkButton = null
+            detailChannelSourceText = null
             detailGateDynViews = null
             return
         }
@@ -4532,12 +4599,60 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         if (isFinishing) {
-            // Activity реально закрывается (не просто пересоздаётся из-за
-            // поворота экрана) - вот тут действительно отключаемся.
+            // Activity реально закрывается - но теперь это ВСЕГДА означает
+            // "пользователь вернулся к выбору режима" (навигация теперь:
+            // ConnectActivity -> RoleSelectActivity -> MainActivity, назад
+            // отсюда всегда попадает в RoleSelectActivity, никогда не
+            // выходит из приложения напрямую). Поэтому здесь - только
+            // ЛЁГКАЯ отписка от подписок ЭТОГО режима, сокет/сессия
+            // ОСТАЮТСЯ жить в ConnectionHolder для следующего режима.
+            // Полное отключение (закрытие сокета) теперь происходит в
+            // RoleSelectActivity.onDestroy() - когда пользователь уходит
+            // даже оттуда.
+            val s = socket
+            val addr = consoleAddress
+            val prt = consolePort
+            if (s != null && addr != null) {
+                val handles = mutableListOf<String>()
+                handles.addAll(ConnectionHolder.subscriptions.keys)
+                handles.addAll(ConnectionHolder.masterSubscriptions.keys)
+                handles.addAll(ConnectionHolder.auxSubscriptions.keys)
+                handles.addAll(ConnectionHolder.auxBusSubscriptions.keys)
+                handles.addAll(ConnectionHolder.vcaSubscriptions.keys)
+                handles.addAll(ConnectionHolder.mainOutSubscriptions.keys)
+                handles.addAll(ConnectionHolder.vcaMemberSubscriptions.keys)
+                CoroutineScope(Dispatchers.IO).launch {
+                    for (handle in handles) {
+                        try {
+                            val packet = Pro2Commands.unsubscribe(handle)
+                            val dp = java.net.DatagramPacket(packet, packet.size, addr, prt)
+                            s.send(dp)
+                        } catch (e: Exception) {
+                            break // сокет уже недоступен - дальше пытаться бессмысленно
+                        }
+                    }
+                    // ВАЖНО: сокет НЕ закрываем - он нужен следующему режиму.
+                }
+            }
             receiveJob?.cancel()
             pollJob?.cancel()
-            socket?.close()
-            ConnectionHolder.reset()
+            subscriptions.clear()
+            masterSubscriptions.clear()
+            auxSubscriptions.clear()
+            auxBusSubscriptions.clear()
+            vcaSubscriptions.clear()
+            mainOutSubscriptions.clear()
+            ConnectionHolder.vcaMemberSubscriptions.clear()
+            auxSendsSubscribed.clear()
+            eqSubscribed.clear()
+            gateSubscribed.clear()
+            inputExtrasSubscribed.clear()
+            compGateExtrasSubscribed.clear()
+            // Сбрасываем ТОЛЬКО признак подписки - следующий режим (при
+            // входе в MainActivity заново) должен подписаться с нуля под
+            // себя, а не решить, что он "восстанавливается после поворота".
+            subscribedAlready = false
+            sessionToken = null
         }
         // Если это пересоздание из-за смены конфигурации (поворот экрана) -
         // НИЧЕГО не закрываем: сокет, job'ы и подписки остаются жить в

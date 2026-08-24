@@ -126,6 +126,42 @@ import java.net.SocketTimeoutException
         }
     }
 
+    /**
+     * Отписывается от ВСЕХ подписок предыдущей сессии перед новым
+     * подключением (или при закрытии приложения). Раньше этого не
+     * происходило вообще - каждое переподключение просто накидывало ещё
+     * ~800 новых подписок поверх старых, которые пульт никогда не узнавал,
+     * что нужно снять (мы просто закрывали свой сокет, ничего не сообщая
+     * пульту). После нескольких переподключений таблица подписок на
+     * пульте, судя по всему, разбухала и начинала "сыпаться" - не только
+     * у нашего приложения, но и у официального Mixtender (общая
+     * перегрузка сессий с одного IP). Отправляется НАИЛУЧШИМ УСИЛИЕМ -
+     * не ждём подтверждения, просто разгружаем пульт перед тем, как
+     * подписаться заново.
+     */
+    internal suspend fun MainActivity.unsubscribeAllPrevious() {
+        val prevSocket = socket ?: return
+        val prevAddress = consoleAddress ?: return
+        val prevPort = consolePort
+        val allHandles = mutableListOf<String>()
+        allHandles.addAll(subscriptions.keys)
+        allHandles.addAll(masterSubscriptions.keys)
+        allHandles.addAll(auxSubscriptions.keys)
+        allHandles.addAll(auxBusSubscriptions.keys)
+        allHandles.addAll(vcaSubscriptions.keys)
+        allHandles.addAll(mainOutSubscriptions.keys)
+        allHandles.addAll(ConnectionHolder.vcaMemberSubscriptions.keys)
+        if (allHandles.isEmpty()) return
+        for (handle in allHandles) {
+            try {
+                sendRaw(prevSocket, prevAddress, prevPort, Pro2Commands.unsubscribe(handle))
+            } catch (e: Exception) {
+                // сокет уже мог быть в процессе закрытия - не критично,
+                // это best-effort очистка, не обязательная для нового подключения
+            }
+        }
+    }
+
     internal fun MainActivity.connectAndSync() {
         val host = editHost.text.toString().trim()
         val port = editPort.text.toString().trim().toIntOrNull()
@@ -136,28 +172,54 @@ import java.net.SocketTimeoutException
 
         receiveJob?.cancel()
         pollJob?.cancel()
-        socket?.close()
-
-        // Новое подключение - начинаем подписку с нуля.
-        sessionToken = null
-        subscribedAlready = false
-        subscriptions.clear()
-        masterSubscriptions.clear()
-        auxSubscriptions.clear()
-        auxBusSubscriptions.clear()
-        vcaSubscriptions.clear()
-        mainOutSubscriptions.clear()
-        auxSendsSubscribed.clear()
-        eqSubscribed.clear()
-        gateSubscribed.clear()
-        inputExtrasSubscribed.clear()
-        compGateExtrasSubscribed.clear()
-        sessionId = System.currentTimeMillis().toString(36)
 
         CoroutineScope(Dispatchers.IO).launch {
+            // Отписываемся от подписок ПРЕДЫДУЩЕЙ сессии, пока старый сокет и
+            // карты подписок ещё живы (используем именно старое соединение -
+            // новое ещё не создано). При самом первом подключении карты
+            // пустые, функция сразу выходит, ничего не делая.
+            unsubscribeAllPrevious()
+            withContext(Dispatchers.Main) { socket?.close() }
+
+            // Новое подключение - начинаем подписку с нуля.
+            withContext(Dispatchers.Main) {
+                sessionToken = null
+                subscribedAlready = false
+                subscriptions.clear()
+                masterSubscriptions.clear()
+                auxSubscriptions.clear()
+                auxBusSubscriptions.clear()
+                vcaSubscriptions.clear()
+                mainOutSubscriptions.clear()
+                auxSendsSubscribed.clear()
+                eqSubscribed.clear()
+                gateSubscribed.clear()
+                inputExtrasSubscribed.clear()
+                compGateExtrasSubscribed.clear()
+                sessionId = System.currentTimeMillis().toString(36)
+            }
+
             try {
                 val address = InetAddress.getByName(host)
-                val newSocket = DatagramSocket(10001) // локальный порт - пульт шлёт ответы именно сюда
+                // Локальный порт 10001 мог на миг остаться занятым ПРЕДЫДУЩИМ
+                // сокетом (тем же самым приложением, при быстром
+                // переподключении) - ОС не всегда освобождает порт мгновенно
+                // после close(). Пробуем несколько раз с паузой вместо
+                // немедленного отказа - раньше это могло дать ложную
+                // "Connection error" при быстром переключении между
+                // инженерным и мониторным режимом.
+                var newSocket: DatagramSocket? = null
+                var lastBindError: Exception? = null
+                for (attempt in 0 until 5) {
+                    try {
+                        newSocket = DatagramSocket(10001)
+                        break
+                    } catch (e: Exception) {
+                        lastBindError = e
+                        delay(150)
+                    }
+                }
+                if (newSocket == null) throw lastBindError ?: Exception("Не удалось занять локальный порт 10001")
 
                 withContext(Dispatchers.Main) {
                     socket = newSocket
@@ -787,6 +849,7 @@ import java.net.SocketTimeoutException
                 "/h_${sid}_${channel}_lpfreq" to Triple(Pro2Commands.lpFilterFreqAddress(), ParamKind.LP_FILTER_FREQ, channel),
                 "/h_${sid}_${channel}_delay" to Triple(Pro2Commands.inputDelayAddress(), ParamKind.INPUT_DELAY, channel),
                 "/h_${sid}_${channel}_link" to Triple(Pro2Commands.linkAddress(), ParamKind.LINK, channel),
+                "/h_${sid}_${channel}_chsource" to Triple(Pro2Commands.channelSourceAddress(), ParamKind.CHANNEL_SOURCE, channel),
             )
             withContext(Dispatchers.Main) {
                 for ((handle, info) in subs) subscriptions[handle] = Subscription(info.third, info.second)

@@ -20,11 +20,11 @@
     <dimen name="bank_button_v_padding">10dp</dimen>
     <dimen name="bank_button_text_size">12sp</dimen>
 
-    <dimen name="top_bar_padding">12dp</dimen>
+    <dimen name="top_bar_padding">8dp</dimen>
     <dimen name="status_text_v_padding">6dp</dimen>
 
     <!-- Мониторный режим -->
-    <dimen name="monitor_top_bar_padding">12dp</dimen>
+    <dimen name="monitor_top_bar_padding">8dp</dimen>
     <dimen name="monitor_connect_row_padding">12dp</dimen>
     <dimen name="monitor_buslevel_padding">12dp</dimen>
     <dimen name="monitor_bank_row_padding">8dp</dimen>

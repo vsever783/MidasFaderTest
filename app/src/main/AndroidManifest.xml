@@ -8,18 +8,19 @@
     <application
         android:allowBackup="true"
         android:label="Midas"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.AppCompat.DayNight">
 
-        <!-- ОДНА точка входа - экран выбора роли (звукорежиссёр/музыкант).
-             Раньше было ДВА отдельных значка с разными taskAffinity, что
-             позволяло случайно запустить оба режима ОДНОВРЕМЕННО с одного
-             и того же телефона (один IP) - а пульт различает клиентов
-             только по IP, не по порту, и путался, куда слать ответы
-             (подтверждено реальным захватом трафика). Теперь оба режима
-             используют общее подключение (порт 10001) внутри MainActivity,
-             так что такая путаница в принципе невозможна. -->
+        <!-- ОДНА цепочка входа: подключение -> выбор роли -> сам режим.
+             Раньше подключение было встроено прямо в MainActivity и
+             целиком пересоздавалось при каждом переключении режима - это
+             было тяжело для пульта. Теперь ConnectActivity подключается
+             ОДИН раз, дальше RoleSelectActivity выбирает режим, а
+             MainActivity переиспользует уже живое соединение (см.
+             MainActivity.beginModeSession()). -->
         <activity
-            android:name=".RoleSelectActivity"
+            android:name=".ConnectActivity"
             android:label="Midas"
             android:exported="true">
             <intent-filter>
@@ -27,6 +28,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".RoleSelectActivity"
+            android:label="Midas"
+            android:exported="false" />
 
         <activity
             android:name=".MainActivity"

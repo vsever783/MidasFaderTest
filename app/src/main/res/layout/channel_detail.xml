@@ -306,6 +306,22 @@
                     android:textColor="#ffffff"
                     android:backgroundTint="#3a3a3c" />
 
+                <!-- Патчинг (какой физический вход подключён) - ТОЛЬКО
+                     ЧТЕНИЕ, сырое число. Кодировка не расшифрована - см.
+                     заметку у Pro2Commands.channelSourceAddress(). Пока
+                     полезно только чтобы собрать данные: смотреть, как
+                     меняется число при ручном патчинге на самом пульте. -->
+                <TextView
+                    android:id="@+id/textDetailChannelSource"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="SOURCE: —"
+                    android:textColor="#8e8e93"
+                    android:textSize="11sp"
+                    android:letterSpacing="0.04"
+                    android:gravity="center"
+                    android:layout_marginTop="8dp" />
+
                 <!-- Панорама - ПОДТВЕРЖДЕНО реальным захватом. -->
                 <TextView
                     android:layout_width="wrap_content"
@@ -584,10 +600,10 @@
                     <View
                         android:id="@+id/detailMeterBar"
                         android:layout_width="match_parent"
-                        android:layout_height="match_parent"
+                        android:layout_height="0dp"
                         android:layout_gravity="bottom"
                         android:background="#34c759"
-                        android:scaleY="0" />
+                        />
                 </FrameLayout>
 
                 <com.example.midasfadercontrol.FaderView
