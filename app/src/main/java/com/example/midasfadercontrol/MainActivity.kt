@@ -1260,7 +1260,7 @@ class MainActivity : AppCompatActivity() {
                 else 0
                 ConnectionHolder.channelData[sub.channel].eqBassShapeMode = mode
                 if (openDetailChannel == sub.channel) {
-                    detailEqViews?.bassShapeButton?.text = eqShapeModeLabel(mode)
+                    detailEqViews?.bassShapeButton?.text = eqShapeModeLabelBass(mode)
                     detailEqViews?.graphView?.bands?.getOrNull(0)?.shapeMode = mode
                     detailEqViews?.graphView?.invalidate()
                 }
@@ -1271,7 +1271,7 @@ class MainActivity : AppCompatActivity() {
                 else 0
                 ConnectionHolder.channelData[sub.channel].eqTrebleShapeMode = mode
                 if (openDetailChannel == sub.channel) {
-                    detailEqViews?.trebleShapeButton?.text = eqShapeModeLabel(mode)
+                    detailEqViews?.trebleShapeButton?.text = eqShapeModeLabelTreble(mode)
                     detailEqViews?.graphView?.bands?.getOrNull(3)?.shapeMode = mode
                     detailEqViews?.graphView?.invalidate()
                 }
@@ -2810,11 +2810,36 @@ class MainActivity : AppCompatActivity() {
      * начала записи) - если после теста окажется, что подписи не совпадают
      * с реальным порядком, тут достаточно поменять местами строки.
      */
-    private fun eqShapeModeLabel(mode: Int): String = when (mode) {
+    /**
+     * Подписи режимов формы BASS/TREBLE - подтверждено ДВУМЯ источниками:
+     * официальным Pro2 Offline Editor (имена файлов картинок в
+     * detailarea3) и вашим собственным тестом на реальном пульте (4
+     * состояния у обеих полос). Более старая версия редактора (G3.4.4,
+     * 2018) показывала только 2/3 состояния без "Peaking" - в прошивке
+     * G3.4.6 (2019, ближе к вашей реальной) появилось 4-е состояние у
+     * обеих полос, что и совпало с вашим наблюдением на пульте. То, что вы
+     * видели как "Parametric" на экране, скорее всего и есть "Peaking" -
+     * официальное внутреннее имя (peaking-фильтр по сути и есть
+     * параметрический колокол).
+     *
+     * ПОРЯДОК циклического переключения (0/1/2/3) НЕ подтверждён - имена
+     * файлов не гарантируют порядок кнопки SHAPE на экране. Если после
+     * проверки на пульте окажется, что подписи идут не в том порядке -
+     * поменять местами строки в этих двух списках, больше ничего трогать
+     * не нужно.
+     */
+    private fun eqShapeModeLabelBass(mode: Int): String = when (mode) {
+        1 -> "DEEP"
+        2 -> "PEAKING"
+        3 -> "WARM"
+        else -> "CLASSIC"
+    }
+
+    private fun eqShapeModeLabelTreble(mode: Int): String = when (mode) {
         1 -> "BRIGHT"
-        2 -> "CLASSIC"
+        2 -> "PEAKING"
         3 -> "SOFT"
-        else -> "PARAMETRIC"
+        else -> "CLASSIC"
     }
 
     private fun openChannelDetail(channel: Int) {
@@ -3609,7 +3634,7 @@ class MainActivity : AppCompatActivity() {
                 val initialMode = if (bandIndex == 0) data.eqBassShapeMode else data.eqTrebleShapeMode
                 val shapeButton = Button(this).apply {
                     setBackgroundResource(R.drawable.console_button_background)
-                    text = eqShapeModeLabel(initialMode)
+                    text = if (bandIndex == 0) eqShapeModeLabelBass(initialMode) else eqShapeModeLabelTreble(initialMode)
                     textSize = 10f
                     minHeight = 0
                     minimumHeight = 0
@@ -3624,7 +3649,7 @@ class MainActivity : AppCompatActivity() {
                         // подтвердит push с пульта следующим сообщением.
                         val newMode = ((if (bandIndex == 0) d.eqBassShapeMode else d.eqTrebleShapeMode) + 1) % 4
                         if (bandIndex == 0) d.eqBassShapeMode = newMode else d.eqTrebleShapeMode = newMode
-                        text = eqShapeModeLabel(newMode)
+                        text = if (bandIndex == 0) eqShapeModeLabelBass(newMode) else eqShapeModeLabelTreble(newMode)
                         graph.bands[bandIndex].shapeMode = newMode
                         graph.invalidate()
                         sendRawAsync(Pro2Commands.setEqShapeNext(channel, band))
