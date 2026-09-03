@@ -126,6 +126,7 @@
     </LinearLayout>
 
     <Button
+        style="@style/Widget.Midas.Button"
         android:id="@+id/btnMute"
         android:layout_width="match_parent"
         android:layout_height="@dimen/channel_mute_height"

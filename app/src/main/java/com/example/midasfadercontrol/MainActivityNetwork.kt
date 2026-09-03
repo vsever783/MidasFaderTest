@@ -80,6 +80,97 @@ import java.net.SocketTimeoutException
         }
     }
 
+    /**
+     * Подписка на членство ВСЕХ потенциальных "детей" в КОНКРЕТНОЙ
+     * мьют-группе - вызывается при открытии экрана "MUTE GROUP N MEMBERS".
+     * Точная копия subscribeVcaMembers() выше (см. подробную заметку там) -
+     * структура симметрична VCA, тоже НЕ подтверждена собственным захватом.
+     */
+    /**
+     * Подписка на принадлежность ОДНОГО канала ко всем мьют-группам -
+     * для строки кнопок MG 1-8 в детальном экране канала (как в X32 Mix).
+     *
+     * Это тот же параметр enMuteGroupChildInput{N}, что и на экране
+     * участников группы, но "с другой стороны": там фиксируют группу и
+     * перебирают каналы, здесь фиксируют канал и перебирают группы.
+     * Всего 8 подписок на канал - подписываемся лениво, при открытии
+     * детального экрана.
+     */
+    internal fun MainActivity.subscribeChannelMuteGroups(channel: Int) {
+        // ИСПРАВЛЕНО: раньше сторожевое множество помечалось ПЕРВОЙ
+        // строкой, до проверки сокета. Если экран канала открывали в
+        // момент, когда соединения ещё нет (например, сразу после
+        // переподключения), канал помечался как "подписан", функция
+        // выходила по `socket ?: return`, и повторной попытки уже не
+        // было - строка MUTE GROUPS у этого канала навсегда оставалась
+        // без данных. Сначала проверяем готовность, помечаем только
+        // когда реально отправляем.
+        val sock = socket ?: return
+        val address = consoleAddress ?: return
+        val port = consolePort
+        val token = sessionToken ?: 0
+        val sid = sessionId
+        if (!channelMuteGroupsSubscribed.add(channel)) return
+        CoroutineScope(Dispatchers.IO).launch {
+            for (g in 0 until ConnectionHolder.MUTE_GROUP_COUNT) {
+                val handle = "/h_${sid}_ch${channel}_mg$g"
+                withContext(Dispatchers.Main) {
+                    ConnectionHolder.channelMuteGroupSubscriptions[handle] = channel to g
+                }
+                try {
+                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(
+                        handle, Pro2Commands.muteGroupChildInputAddress(channel), g, g, token))
+                } catch (e: Exception) {
+                    // не критично
+                }
+                delay(2)
+            }
+        }
+    }
+
+    internal fun MainActivity.subscribeMuteGroupMembers(groupIndex: Int) {
+        val sock = socket ?: return
+        val address = consoleAddress ?: return
+        val port = consolePort
+        val token = sessionToken ?: return
+        val sid = sessionId
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val jobs = listOf(
+                Triple("input", 56) { i: Int -> Pro2Commands.muteGroupChildInputAddress(i) },
+                Triple("submix", 16) { i: Int -> Pro2Commands.muteGroupChildSubMixAddress(i) },
+                Triple("auxreturn", 8) { i: Int -> Pro2Commands.muteGroupChildAuxReturnAddress(i) },
+                Triple("main", 8) { i: Int -> Pro2Commands.muteGroupChildMainAddress(i) }
+            )
+            for ((childType, count, addrFn) in jobs) {
+                for (i in 0 until count) {
+                    val handle = "/h_${sid}_mgm${groupIndex}_${childType}_$i"
+                    withContext(Dispatchers.Main) {
+                        muteGroupMemberSubscriptions[handle] = MuteGroupMemberSub(childType, i, groupIndex)
+                    }
+                    try {
+                        sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, addrFn(i), groupIndex, groupIndex, token))
+                    } catch (e: Exception) {
+                        // не критично
+                    }
+                    delay(2)
+                }
+            }
+            for ((i, letter) in listOf("L", "R", "C").withIndex()) {
+                val handle = "/h_${sid}_mgm${groupIndex}_master_$i"
+                withContext(Dispatchers.Main) {
+                    muteGroupMemberSubscriptions[handle] = MuteGroupMemberSub("master", i, groupIndex)
+                }
+                try {
+                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, Pro2Commands.muteGroupChildMasterAddress(letter), groupIndex, groupIndex, token))
+                } catch (e: Exception) {
+                    // не критично
+                }
+                delay(2)
+            }
+        }
+    }
+
     internal fun MainActivity.subscribeChannelSendsForBus(bus: Int) {
         val sock = socket ?: return
         val address = consoleAddress ?: return
@@ -151,6 +242,7 @@ import java.net.SocketTimeoutException
         allHandles.addAll(vcaSubscriptions.keys)
         allHandles.addAll(mainOutSubscriptions.keys)
         allHandles.addAll(ConnectionHolder.vcaMemberSubscriptions.keys)
+        allHandles.addAll(ConnectionHolder.muteGroupMemberSubscriptions.keys)
         if (allHandles.isEmpty()) return
         for (handle in allHandles) {
             try {
@@ -184,18 +276,14 @@ import java.net.SocketTimeoutException
             // Новое подключение - начинаем подписку с нуля.
             withContext(Dispatchers.Main) {
                 sessionToken = null
-                subscribedAlready = false
-                subscriptions.clear()
-                masterSubscriptions.clear()
-                auxSubscriptions.clear()
-                auxBusSubscriptions.clear()
-                vcaSubscriptions.clear()
-                mainOutSubscriptions.clear()
-                auxSendsSubscribed.clear()
-                eqSubscribed.clear()
-                gateSubscribed.clear()
-                inputExtrasSubscribed.clear()
-                compGateExtrasSubscribed.clear()
+                ConnectionHolder.lastPacketAtMs = 0L
+                ConnectionHolder.releaseSubscribeGate()
+                // ИСПРАВЛЕНИЕ: раньше здесь перечислялись карты вручную и
+                // ТРИ из них забывались (vcaMemberSubscriptions,
+                // mainOutExtrasSubscribed, auxBusExtrasSubscribed) - из-за
+                // чего детальные экраны MATRIX/AUX после переподключения
+                // больше не переподписывались. Теперь одна общая функция.
+                ConnectionHolder.clearAllSubscriptionState()
                 sessionId = System.currentTimeMillis().toString(36)
             }
 
@@ -225,8 +313,11 @@ import java.net.SocketTimeoutException
                     socket = newSocket
                     consoleAddress = address
                     consolePort = port
-                    textConnectionStatus.text = "● Connected"
-                    textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
+                    // НЕ "Connected": сокет создан, но пульт ещё ни разу
+                    // не ответил. Зелёный поставит сторожевой таймер в
+                    // pollJob, когда реально придут данные.
+                    textConnectionStatus.text = "● Подключение..."
+                    textConnectionStatus.setTextColor(Color.parseColor("#ff9f0a"))
                     textStatus.text = "Connected to $host:$port, subscribing to live updates..."
                     collapseConnectForm()
                 }
@@ -256,9 +347,11 @@ import java.net.SocketTimeoutException
                 // Решение: подписываемся СРАЗУ с условным токеном-заглушкой (0),
                 // не дожидаясь ответа. Если позже придёт настоящий токен от пульта -
                 // sessionToken обновится, но переподписываться заново не обязательно.
-                subscribedAlready = true
                 sessionToken = 0
-                if (appMode != MODE_MONITOR) {
+                // Замок: subscribeAll() выполнит только первый вызывающий.
+                // Берём его в обоих режимах - см. пояснение в MainActivity.
+                val firstClaim = ConnectionHolder.claimSubscribeAll()
+                if (firstClaim && appMode != MODE_MONITOR) {
                     subscribeAll()
                 }
                 startPollLoop(newSocket, address, port)
@@ -317,18 +410,60 @@ import java.net.SocketTimeoutException
                 } catch (e: Exception) {
                     if (!isActive) break
                 }
+                // СТОРОЖЕВОЙ ТАЙМЕР СВЯЗИ.
+                // Пульт при активных подписках шлёт обновления десятки раз
+                // в секунду, поэтому молчание в несколько секунд - надёжный
+                // признак обрыва (выключили пульт, выдернули кабель, ушли из
+                // сети Wi-Fi). Раньше индикатор зеленел один раз при
+                // создании сокета и не менялся уже никогда.
+                val last = ConnectionHolder.lastPacketAtMs
+                val silentMs = if (last == 0L) Long.MAX_VALUE
+                               else android.os.SystemClock.elapsedRealtime() - last
+                withContext(Dispatchers.Main) {
+                    when {
+                        silentMs > 6000L -> {
+                            textConnectionStatus.text = "● Нет связи с пультом"
+                            textConnectionStatus.setTextColor(Color.parseColor("#ff3b30"))
+                        }
+                        silentMs > 3000L -> {
+                            textConnectionStatus.text = "● Связь нестабильна"
+                            textConnectionStatus.setTextColor(Color.parseColor("#ff9f0a"))
+                        }
+                        else -> {
+                            textConnectionStatus.text = "● Connected"
+                            textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
+                        }
+                    }
+                }
             }
         }
     }
 
     internal fun MainActivity.startReceiveLoop(socket: DatagramSocket) {
+        // Единственный потребитель очереди. Один на всю сессию вместо
+        // корутины на каждый пакет.
+        ConnectionHolder.uiJob?.cancel()
+        ConnectionHolder.uiJob = CoroutineScope(Dispatchers.Main).launch {
+            for (batch in ConnectionHolder.incomingQueue) {
+                for (msg in batch) handleIncomingMessage(msg)
+            }
+        }
         receiveJob = CoroutineScope(Dispatchers.IO).launch {
-            val buffer = ByteArray(4096)
+            // ИСПРАВЛЕНИЕ: было 4096. DatagramPacket обрезает датаграмму по
+            // размеру буфера МОЛЧА - без исключения и без признака обрезки.
+            // Обрезанный бандл потом разбирается частично (парсер упирается
+            // в `pos + size > end` и прекращает разбор), то есть часть
+            // обновлений просто теряется, причём тем чаще, чем больше
+            // подписок. 64 КБ - максимальный размер UDP-датаграммы, так что
+            // обрезка исключена в принципе.
+            val buffer = ByteArray(65536)
             socket.soTimeout = 1000
             while (isActive) {
                 try {
                     val packet = DatagramPacket(buffer, buffer.size)
                     socket.receive(packet)
+                    // Отметка живой связи - см. ConnectionHolder.lastPacketAtMs.
+                    ConnectionHolder.lastPacketAtMs = android.os.SystemClock.elapsedRealtime()
                     val data = packet.data.copyOfRange(packet.offset, packet.offset + packet.length)
 
                     // ВАЖНО: пульт почти всё шлёт завёрнутым в OSC-бандлы, а не
@@ -349,9 +484,21 @@ import java.net.SocketTimeoutException
                     // всего. Теперь просто "отправляем и забываем" - цикл
                     // приёма сразу же возвращается вычитывать сокет дальше,
                     // не дожидаясь окончания отрисовки.
-                    CoroutineScope(Dispatchers.Main).launch {
-                        for (msg in messages) handleIncomingMessage(msg)
-                    }
+                    // ИСПРАВЛЕНИЕ ПОДВИСАНИЙ.
+                    // Раньше здесь на КАЖДЫЙ пакет создавалась новая
+                    // CoroutineScope и запускалась корутина на главном
+                    // потоке. Пульт шлёт десятки пакетов в секунду, и
+                    // если главный поток не успевает их отрисовывать
+                    // (а на планшете виджетов заметно больше), очередь
+                    // задач растёт без ограничений. Интерфейс при этом
+                    // продолжает разгребать УСТАРЕВШИЕ значения - отсюда
+                    // и тормоза при открытии и переключении вкладок.
+                    //
+                    // Теперь пакеты складываются в очередь ограниченной
+                    // длины: при переполнении самые старые выбрасываются.
+                    // Для метров и уровней это ровно то, что нужно -
+                    // важно последнее значение, а не все промежуточные.
+                    ConnectionHolder.incomingQueue.trySend(messages)
                 } catch (e: SocketTimeoutException) {
                     // норма - просто нет данных за секунду, продолжаем ждать
                 } catch (e: Exception) {
@@ -372,10 +519,57 @@ import java.net.SocketTimeoutException
             val token = message.args[1] as? Int
             if (token != null) {
                 sessionToken = token
-                if (!subscribedAlready) {
-                    subscribedAlready = true
+                // Раньше здесь была неатомарная проверка !subscribedAlready -
+                // при гонке с потоком подключения подписка уходила дважды.
+                if (ConnectionHolder.claimSubscribeAll()) {
                     subscribeAll()
                 }
+            }
+        }
+
+        // ОТСЕВ ПОВТОРОВ.
+        // Пульт присылает значение подписки постоянно (по захвату - около
+        // 30 раз в секунду), НЕЗАВИСИМО от того, менялось ли оно. Без
+        // отсева приложение перерисовывает интерфейс на каждое такое
+        // сообщение, хотя показывать нечего нового: тысячи операций с
+        // вью в секунду впустую. Именно это и делало планшет вялым.
+        //
+        // Сравниваем с прошлым значением по хэндлу и выходим, если оно не
+        // изменилось. Метры и движущиеся фейдеры проходят дальше как
+        // обычно - у них значение действительно меняется.
+        //
+        // Безопасно потому, что экраны при открытии берут состояние из
+        // ConnectionHolder напрямую, а не ждут очередного пакета.
+        if (message.typeTag == ",bi" && message.args.isNotEmpty()) {
+            val blob = message.args[0] as? ByteArray
+            if (blob != null && blob.size == 4) {
+                val v = (blob[0].toInt() and 0xFF) or ((blob[1].toInt() and 0xFF) shl 8) or
+                        ((blob[2].toInt() and 0xFF) shl 16) or ((blob[3].toInt() and 0xFF) shl 24)
+                val prev = ConnectionHolder.lastValueByHandle.put(message.address, v)
+                if (prev != null && prev == v) return
+            }
+        }
+
+        // ДИАГНОСТИКА: пульт отвечает на подписку ВСЕГДА, но если параметра
+        // в этой группе не существует, в ответ приходит blob НУЛЕВОЙ длины
+        // вместо обычных 4 байт. Раньше такие ответы просто молча
+        // отбрасывались проверками вида `blob.size >= 4`, и неработающий
+        // параметр было невозможно отличить от работающего: ручка рисуется,
+        // крутится, команды уходят - а пульт их игнорирует.
+        //
+        // Так были найдены сразу несколько ошибок в адресах (третья полоса
+        // канального EQ, gain EQ aux-шин, три параметра компрессора MATRIX).
+        // Теперь каждый такой параметр попадает в лог ровно один раз.
+        if (message.typeTag == ",bi" && message.args.isNotEmpty()) {
+            val probe = message.args[0] as? ByteArray
+            if (probe != null && probe.isEmpty() &&
+                ConnectionHolder.unsupportedHandles.add(message.address)
+            ) {
+                android.util.Log.w(
+                    "MidasUnsupported",
+                    "Пульт вернул пустое значение для ${message.address} - " +
+                        "параметра нет в этой группе, адрес нужно проверить"
+                )
             }
         }
 
@@ -410,6 +604,25 @@ import java.net.SocketTimeoutException
             handleVcaSubscribedValue(vcaSub, blob)
             return
         }
+        val chMg = ConnectionHolder.channelMuteGroupSubscriptions[message.address]
+        if (chMg != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
+            val blob = message.args[0] as? ByteArray ?: return
+            if (blob.size >= 4) {
+                val member = java.nio.ByteBuffer.wrap(blob)
+                    .order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
+                val (ch, g) = chMg
+                ConnectionHolder.channelMuteGroups[ch][g] = member
+                updateChannelMuteGroupButton(ch, g, member)
+            }
+            return
+        }
+
+        val muteGroupSub = ConnectionHolder.muteGroupSubscriptions[message.address]
+        if (muteGroupSub != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
+            val blob = message.args[0] as? ByteArray ?: return
+            handleMuteGroupSubscribedValue(muteGroupSub, blob)
+            return
+        }
         val mainOutSub = mainOutSubscriptions[message.address]
         if (mainOutSub != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
             val blob = message.args[0] as? ByteArray ?: return
@@ -420,6 +633,12 @@ import java.net.SocketTimeoutException
         if (vcaMemberSub != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
             val blob = message.args[0] as? ByteArray ?: return
             handleVcaMemberSubscribedValue(vcaMemberSub, blob)
+            return
+        }
+        val muteGroupMemberSub = ConnectionHolder.muteGroupMemberSubscriptions[message.address]
+        if (muteGroupMemberSub != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
+            val blob = message.args[0] as? ByteArray ?: return
+            handleMuteGroupMemberSubscribedValue(muteGroupMemberSub, blob)
             return
         }
 
@@ -597,6 +816,28 @@ import java.net.SocketTimeoutException
                 }
             }
 
+            // Мьют-группы (8 шт.) - базовое состояние (mute-кнопка + имя).
+            // Членство детей подписывается отдельно, лениво, только при
+            // открытии экрана участников (см. subscribeMuteGroupMembers) -
+            // как и у VCA, 5 полей x 56+16+8+8+3 = слишком много для
+            // безусловной подписки при каждом входе в приложение.
+            // ⚠ Структура НЕ подтверждена собственным захватом трафика.
+            for (g in 0 until ConnectionHolder.MUTE_GROUP_COUNT) {
+                val muteGroupSubs = listOf(
+                    "/h_${sid}_mg${g}_mute" to Triple(Pro2Commands.muteGroupMuteAddress(), ParamKind.MUTE, g),
+                    "/h_${sid}_mg${g}_name" to Triple(Pro2Commands.muteGroupNameAddress(), ParamKind.NAME, g),
+                )
+                for ((handle, info) in muteGroupSubs) {
+                    val (path, kind, gIdx) = info
+                    withContext(Dispatchers.Main) { ConnectionHolder.muteGroupSubscriptions[handle] = Subscription(gIdx, kind) }
+                    try {
+                        sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, gIdx, gIdx, token))
+                    } catch (e: Exception) {
+                        // не критично - не прерываем остальное
+                    }
+                }
+            }
+
             // Main Outs (8 шт., "matrix out" на пульте) - базовая полоса.
             // fader ПОДТВЕРЖДЁН сторонним датасетом; mute/solo/цвет/метр -
             // по аналогии с остальными группами (см. заметку в
@@ -664,6 +905,32 @@ import java.net.SocketTimeoutException
                     // не критично
                 }
                 delay(2)
+            }
+
+            // Посылы в 8 матричных шин (enMainSendLevel1-8). Показываются
+            // на том же экране SENDS, что и аукс-посылы, поэтому
+            // подписываемся здесь же - отдельная ленивая подписка не нужна.
+            for (mtx in 1..8) {
+                val handle = "/h_${sid}_${channel}_mtx$mtx"
+                val enHandle = "/h_${sid}_${channel}_mtxen$mtx"
+                val preHandle = "/h_${sid}_${channel}_mtxpre$mtx"
+                withContext(Dispatchers.Main) {
+                    subscriptions[handle] = Subscription(channel, ParamKind.MATRIX_SEND, mtx)
+                    subscriptions[enHandle] = Subscription(channel, ParamKind.MATRIX_SEND_ENABLE, mtx)
+                    subscriptions[preHandle] = Subscription(channel, ParamKind.MATRIX_SEND_PREFADE, mtx)
+                }
+                for ((h, path) in listOf(
+                    handle to Pro2Commands.mainSendLevelAddress(mtx),
+                    enHandle to Pro2Commands.mainSendEnableAddress(mtx),
+                    preHandle to Pro2Commands.mainSendPreFadeAddress(mtx)
+                )) {
+                    try {
+                        sendRaw(sock, address, port, Pro2Commands.batchSubscribe(h, path, channel, channel, token))
+                    } catch (e: Exception) {
+                        // не критично
+                    }
+                    delay(2)
+                }
             }
         }
     }
@@ -764,17 +1031,21 @@ import java.net.SocketTimeoutException
             // Новые параметры - ПОДТВЕРЖДЕНЫ реальным захватом трафика
             // (all config ipad.pcapng), поведение не проверялось.
             subs.add("/h_${sid}_mo${index}_link" to Subscription(index, ParamKind.LINK))
-            subs.add("/h_${sid}_mo${index}_presence" to Subscription(index, ParamKind.COMP_PRESENCE))
             subs.add("/h_${sid}_mo${index}_bustrim" to Subscription(index, ParamKind.BUS_TRIM))
             subs.add("/h_${sid}_mo${index}_compstyle" to Subscription(index, ParamKind.COMP_STYLE))
-            subs.add("/h_${sid}_mo${index}_filterbw" to Subscription(index, ParamKind.COMP_FILTER_BANDWIDTH))
-            subs.add("/h_${sid}_mo${index}_knee" to Subscription(index, ParamKind.COMP_KNEE))
             paths["/h_${sid}_mo${index}_link"] = Pro2Commands.mainOutPairingAddress()
-            paths["/h_${sid}_mo${index}_presence"] = Pro2Commands.mainOutCompPresenceAddress()
             paths["/h_${sid}_mo${index}_bustrim"] = Pro2Commands.mainOutBusTrimAddress()
             paths["/h_${sid}_mo${index}_compstyle"] = Pro2Commands.mainOutCompStyleAddress()
-            paths["/h_${sid}_mo${index}_filterbw"] = Pro2Commands.mainOutCompFilterBandwidthAddress()
-            paths["/h_${sid}_mo${index}_knee"] = Pro2Commands.mainOutCompKneeAddress()
+            // УБРАНЫ: presence / filterbw / knee.
+            // Пульт отвечал на эти подписки blob-ом НУЛЕВОЙ длины, то есть
+            // "такого параметра в этой группе нет" - по 7241 ответу на
+            // каждый, ни одного значения. Датасет подтверждает независимо:
+            // enCompLimPresence / enCompLimKnee / enCompLimFilterBandwidth
+            // существуют у Masters, MicInputs и SubMixes, но НЕ у MainOuts.
+            // Изначально они были приписаны MainOuts по ошибке при разборе
+            // захвата. enCompStyle, наоборот, ОСТАЁТСЯ - он у MainOuts
+            // реальный (7241 ответ с настоящими 4-байтовыми значениями),
+            // хотя в датасете его нет вообще ни в одной группе.
 
             withContext(Dispatchers.Main) {
                 for ((handle, sub) in subs) mainOutSubscriptions[handle] = sub
@@ -954,3 +1225,42 @@ import java.net.SocketTimeoutException
         socket.send(DatagramPacket(packet, packet.size, address, port))
     }
 
+
+/**
+ * Аккуратная массовая отписка при выходе.
+ *
+ * ПОЧЕМУ ЭТО ВАЖНО ДЛЯ ДРУГИХ КЛИЕНТОВ ПУЛЬТА.
+ * Пока подписка жива, пульт продолжает слать по ней значения — даже если
+ * наше приложение уже закрыто. Пульт обслуживает нескольких клиентов
+ * одновременно (например, официальный Mixtender на другом планшете), и
+ * брошенные подписки расходуют его ресурсы впустую до истечения таймаута.
+ *
+ * Здесь исправлены две проблемы прежнего кода:
+ *  1) цикл прерывался (break) на ПЕРВОЙ же ошибке отправки — одна
+ *     случайная осечка оставляла все оставшиеся сотни подписок живыми;
+ *     теперь одиночные ошибки пропускаются, и выход происходит только
+ *     если подряд не проходит много пакетов (значит, сокет действительно
+ *     мёртв и продолжать бессмысленно);
+ *  2) отписки уходили сплошным потоком без пауз, хотя подписки мы
+ *     специально шлём с интервалом 2 мс, чтобы не заваливать пульт —
+ *     теперь темп одинаковый в обе стороны.
+ */
+internal suspend fun unsubscribeHandles(
+    socket: DatagramSocket,
+    address: InetAddress,
+    port: Int,
+    handles: Collection<String>
+) {
+    var consecutiveFailures = 0
+    for (handle in handles) {
+        try {
+            val packet = Pro2Commands.unsubscribe(handle)
+            socket.send(DatagramPacket(packet, packet.size, address, port))
+            consecutiveFailures = 0
+        } catch (e: Exception) {
+            consecutiveFailures++
+            if (consecutiveFailures >= 10) return
+        }
+        delay(2)
+    }
+}

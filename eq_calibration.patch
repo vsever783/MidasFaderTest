@@ -1,0 +1,122 @@
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/EqCurveView.kt	2026-08-20 16:53:23.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/EqCurveView.kt	2026-08-31 12:37:57.046800517 +0000
+@@ -39,8 +39,12 @@
+         private val bandHzRangeStatic = mapOf(
+             BandId.BASS to (16f to 400f),
+             BandId.LOW_MID to (80f to 2000f),
+-            // Уточнено по новому фото экрана пульта (hi mid): было 350,
+-            // на шкале реально 320.
++            // 320 Гц - ПОДТВЕРЖДЕНО фотографией лимба на экране пульта:
++            // метки hi mid идут 320/550/950/1k6/2k7/4k7/8k. Проверка
++            // геометрии: шкала логарифмическая с шагом ~1.71, и
++            // 320 * 1.71^6 = 7724 (≈8k, сходится), тогда как
++            // 350 * 1.71^6 = 8448 (не сходится). В текстовой заметке было
++            // записано "350" - это описка, фото имеет приоритет.
+             BandId.MID_HIGH to (320f to 8000f),
+             BandId.TREBLE to (1000f to 25000f)
+         )
+@@ -51,15 +55,19 @@
+             return exp(ln(minHz) + raw.coerceIn(0f, 1f) * (ln(maxHz) - ln(minHz)))
+         }
+ 
+-        // WIDTH (добротность полосы) - подтверждено реальным диапазоном
+-        // 0.1-3.0 (из заметок при тестировании на пульте), но САМА форма
+-        // зависимости (линейная/логарифмическая) не подтверждена - берём
+-        // простую линейную интерполяцию как разумное предположение по
+-        // умолчанию.
++        // WIDTH (добротность) - диапазон 0.1-3.0 подтверждён.
++        //
++        // ИСПРАВЛЕНО: шкала ЛОГАРИФМИЧЕСКАЯ, а не линейная. По фото лимба
++        // метки идут .1 / .3 / 1 / 3 через равные углы, то есть каждый шаг
++        // - умножение примерно на 3.1 (0.1*3.107^3 = 3.0). Линейная
++        // формула давала в середине хода 1.55 вместо реальных 0.55 -
++        // почти втрое мимо, из-за чего колокол на графике был заметно
++        // шире, чем на пульте, при том же положении ручки.
+         private const val widthMin = 0.1f
+         private const val widthMax = 3.0f
+ 
+-        fun rawToWidthPublic(raw: Float): Float = widthMin + raw.coerceIn(0f, 1f) * (widthMax - widthMin)
++        fun rawToWidthPublic(raw: Float): Float =
++            widthMin * (widthMax / widthMin).pow(raw.coerceIn(0f, 1f))
+ 
+         fun formatWidth(width: Float): String = "%.2f".format(width)
+ 
+@@ -67,13 +75,47 @@
+         fun formatHz(hz: Float): String =
+             if (hz >= 1000f) "%.1f kHz".format(hz / 1000f) else "%.0f Hz".format(hz)
+ 
+-        // Тот же диапазон, что и в самом графике (gainRangeDb в теле класса) -
+-        // ±16 дБ, уточнено по фото шкалы пульта.
+-        private const val eqGainRangeDb = 16f
+-        fun formatEqGain(raw: Float): String {
+-            val db = (raw.coerceIn(0f, 1f) - 0.5f) * 2f * eqGainRangeDb
+-            return "%+.1f dB".format(db)
++        // GAIN - диапазон ±16 дБ подтверждён.
++        //
++        // ИСПРАВЛЕНО: шкала НЕ линейная. По фото лимба метки идут
++        // 16 / 10 / 0 / 10 / 16 через равные углы, то есть на первую
++        // четверть хода приходится 6 дБ (16->10), а на вторую - 10 дБ
++        // (10->0). Края шкалы "сжаты" - так делают, чтобы около нуля
++        // регулировка была точнее. Линейная формула врала до 2 дБ в
++        // четвертях хода (показывала -8 там, где на пульте -10).
++        private val gainPoints = listOf(
++            0f to -16f, 0.25f to -10f, 0.5f to 0f, 0.75f to 10f, 1f to 16f
++        )
++
++        /** Сырое 0..1 -> дБ по реальной шкале лимба. */
++        fun rawToGainDb(raw: Float): Float {
++            val x = raw.coerceIn(0f, 1f)
++            for (i in 0 until gainPoints.size - 1) {
++                val (x0, y0) = gainPoints[i]
++                val (x1, y1) = gainPoints[i + 1]
++                if (x <= x1) {
++                    val t = if (x1 == x0) 0f else (x - x0) / (x1 - x0)
++                    return y0 + (y1 - y0) * t
++                }
++            }
++            return gainPoints.last().second
+         }
++
++        /** дБ -> сырое 0..1 (обратная к rawToGainDb, для перетаскивания точки). */
++        fun gainDbToRaw(db: Float): Float {
++            val d = db.coerceIn(-16f, 16f)
++            for (i in 0 until gainPoints.size - 1) {
++                val (x0, y0) = gainPoints[i]
++                val (x1, y1) = gainPoints[i + 1]
++                if (d <= y1) {
++                    val t = if (y1 == y0) 0f else (d - y0) / (y1 - y0)
++                    return x0 + (x1 - x0) * t
++                }
++            }
++            return 1f
++        }
++
++        fun formatEqGain(raw: Float): String = "%+.1f dB".format(rawToGainDb(raw))
+     }
+ 
+     data class Band(
+@@ -198,13 +240,13 @@
+     private fun xToFreq(x: Float) = ((x - plotLeft) / (plotRight - plotLeft)).coerceIn(0f, 1f)
+ 
+     private fun gainToY(g: Float): Float {
+-        val db = (g - 0.5f) * 2f * gainRangeDb
++        val db = rawToGainDb(g)
+         return plotBottom - (db + gainRangeDb) / (2 * gainRangeDb) * (plotBottom - plotTop)
+     }
+     private fun yToGain(y: Float): Float {
+         val t = ((plotBottom - y) / (plotBottom - plotTop)).coerceIn(0f, 1f)
+         val db = t * (2 * gainRangeDb) - gainRangeDb
+-        return (db / (2 * gainRangeDb) + 0.5f).coerceIn(0f, 1f)
++        return gainDbToRaw(db)
+     }
+ 
+     override fun onDraw(canvas: Canvas) {
+@@ -237,7 +279,7 @@
+             for ((i, band) in bands.withIndex()) {
+                 if (!band.active) continue
+                 val bandId = bandOrder[i]
+-                val bandDb = (band.gain - 0.5f) * 2f * gainRangeDb
++                val bandDb = rawToGainDb(band.gain)
+                 val bandXNorm = hzToXNorm(rawToHz(band.freq, bandId))
+                 // РАНЬШЕ здесь была захардкоженная константа 0.10f - ручка
+                 // WIDTH визуально ни на что не влияла, хотя число под ней

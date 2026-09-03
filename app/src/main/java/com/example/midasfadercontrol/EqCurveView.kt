@@ -39,8 +39,12 @@ class EqCurveView @JvmOverloads constructor(
         private val bandHzRangeStatic = mapOf(
             BandId.BASS to (16f to 400f),
             BandId.LOW_MID to (80f to 2000f),
-            // Уточнено по новому фото экрана пульта (hi mid): было 350,
-            // на шкале реально 320.
+            // 320 Гц - ПОДТВЕРЖДЕНО фотографией лимба на экране пульта:
+            // метки hi mid идут 320/550/950/1k6/2k7/4k7/8k. Проверка
+            // геометрии: шкала логарифмическая с шагом ~1.71, и
+            // 320 * 1.71^6 = 7724 (≈8k, сходится), тогда как
+            // 350 * 1.71^6 = 8448 (не сходится). В текстовой заметке было
+            // записано "350" - это описка, фото имеет приоритет.
             BandId.MID_HIGH to (320f to 8000f),
             BandId.TREBLE to (1000f to 25000f)
         )
@@ -51,15 +55,19 @@ class EqCurveView @JvmOverloads constructor(
             return exp(ln(minHz) + raw.coerceIn(0f, 1f) * (ln(maxHz) - ln(minHz)))
         }
 
-        // WIDTH (добротность полосы) - подтверждено реальным диапазоном
-        // 0.1-3.0 (из заметок при тестировании на пульте), но САМА форма
-        // зависимости (линейная/логарифмическая) не подтверждена - берём
-        // простую линейную интерполяцию как разумное предположение по
-        // умолчанию.
+        // WIDTH (добротность) - диапазон 0.1-3.0 подтверждён.
+        //
+        // ИСПРАВЛЕНО: шкала ЛОГАРИФМИЧЕСКАЯ, а не линейная. По фото лимба
+        // метки идут .1 / .3 / 1 / 3 через равные углы, то есть каждый шаг
+        // - умножение примерно на 3.1 (0.1*3.107^3 = 3.0). Линейная
+        // формула давала в середине хода 1.55 вместо реальных 0.55 -
+        // почти втрое мимо, из-за чего колокол на графике был заметно
+        // шире, чем на пульте, при том же положении ручки.
         private const val widthMin = 0.1f
         private const val widthMax = 3.0f
 
-        fun rawToWidthPublic(raw: Float): Float = widthMin + raw.coerceIn(0f, 1f) * (widthMax - widthMin)
+        fun rawToWidthPublic(raw: Float): Float =
+            widthMin * (widthMax / widthMin).pow(raw.coerceIn(0f, 1f))
 
         fun formatWidth(width: Float): String = "%.2f".format(width)
 
@@ -67,13 +75,47 @@ class EqCurveView @JvmOverloads constructor(
         fun formatHz(hz: Float): String =
             if (hz >= 1000f) "%.1f kHz".format(hz / 1000f) else "%.0f Hz".format(hz)
 
-        // Тот же диапазон, что и в самом графике (gainRangeDb в теле класса) -
-        // ±16 дБ, уточнено по фото шкалы пульта.
-        private const val eqGainRangeDb = 16f
-        fun formatEqGain(raw: Float): String {
-            val db = (raw.coerceIn(0f, 1f) - 0.5f) * 2f * eqGainRangeDb
-            return "%+.1f dB".format(db)
+        // GAIN - диапазон ±16 дБ подтверждён.
+        //
+        // ИСПРАВЛЕНО: шкала НЕ линейная. По фото лимба метки идут
+        // 16 / 10 / 0 / 10 / 16 через равные углы, то есть на первую
+        // четверть хода приходится 6 дБ (16->10), а на вторую - 10 дБ
+        // (10->0). Края шкалы "сжаты" - так делают, чтобы около нуля
+        // регулировка была точнее. Линейная формула врала до 2 дБ в
+        // четвертях хода (показывала -8 там, где на пульте -10).
+        private val gainPoints = listOf(
+            0f to -16f, 0.25f to -10f, 0.5f to 0f, 0.75f to 10f, 1f to 16f
+        )
+
+        /** Сырое 0..1 -> дБ по реальной шкале лимба. */
+        fun rawToGainDb(raw: Float): Float {
+            val x = raw.coerceIn(0f, 1f)
+            for (i in 0 until gainPoints.size - 1) {
+                val (x0, y0) = gainPoints[i]
+                val (x1, y1) = gainPoints[i + 1]
+                if (x <= x1) {
+                    val t = if (x1 == x0) 0f else (x - x0) / (x1 - x0)
+                    return y0 + (y1 - y0) * t
+                }
+            }
+            return gainPoints.last().second
         }
+
+        /** дБ -> сырое 0..1 (обратная к rawToGainDb, для перетаскивания точки). */
+        fun gainDbToRaw(db: Float): Float {
+            val d = db.coerceIn(-16f, 16f)
+            for (i in 0 until gainPoints.size - 1) {
+                val (x0, y0) = gainPoints[i]
+                val (x1, y1) = gainPoints[i + 1]
+                if (d <= y1) {
+                    val t = if (y1 == y0) 0f else (d - y0) / (y1 - y0)
+                    return x0 + (x1 - x0) * t
+                }
+            }
+            return 1f
+        }
+
+        fun formatEqGain(raw: Float): String = "%+.1f dB".format(rawToGainDb(raw))
     }
 
     data class Band(
@@ -143,6 +185,14 @@ class EqCurveView @JvmOverloads constructor(
         color = Color.parseColor("#33ff9f0a")
     }
     private val nodePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    // Заливка и контур ОТДЕЛЬНОЙ полосы своим цветом (как на пульте).
+    // Цвет выставляется на каждую полосу в onDraw, здесь только стиль.
+    private val bandFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val bandLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        strokeCap = Paint.Cap.ROUND
+    }
     private val nodeStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 3f
@@ -194,17 +244,88 @@ class EqCurveView @JvmOverloads constructor(
         return hzToRaw(hz, band)
     }
 
+    // Диапазоны фильтров из официального мануала PRO2 (стр. 314):
+    //   hi pass 10 Hz .. 400 Hz, lo pass 2 kHz .. 20 kHz.
+    // ИСПРАВЛЕНО: раньше сырое значение 0..1 клалось freqToX() линейно на
+    // ВСЮ ось графика (20 Гц..20 кГц). Из-за этого маркер HP при значении
+    // 0.5 оказывался около 630 Гц вместо ~63 Гц, а маркер LP - в районе
+    // 630 Гц вместо ~6.3 кГц, то есть вообще вне своего диапазона. Ползунки
+    // при этом показывали правильное положение - расходился именно график.
+    private val hpHzRange = 10f to 400f
+    private val lpHzRange = 2000f to 20000f
+
+    private fun rawToRangeHz(raw: Float, range: Pair<Float, Float>): Float =
+        exp(ln(range.first) + raw.coerceIn(0f, 1f) * (ln(range.second) - ln(range.first)))
+
+    private fun rangeHzToRaw(hz: Float, range: Pair<Float, Float>): Float {
+        val clamped = hz.coerceIn(range.first, range.second)
+        return ((ln(clamped) - ln(range.first)) / (ln(range.second) - ln(range.first))).coerceIn(0f, 1f)
+    }
+
+    /** Позиция маркера фильтра по X - через реальный диапазон, а не всю ось. */
+    private fun hpToX(raw: Float) = plotLeft + hzToXNorm(rawToRangeHz(raw, hpHzRange)) * (plotRight - plotLeft)
+    private fun lpToX(raw: Float) = plotLeft + hzToXNorm(rawToRangeHz(raw, lpHzRange)) * (plotRight - plotLeft)
+    private fun xToHpRaw(x: Float) = rangeHzToRaw(xNormToHz(xToFreq(x)), hpHzRange)
+    private fun xToLpRaw(x: Float) = rangeHzToRaw(xNormToHz(xToFreq(x)), lpHzRange)
+
     private fun freqToX(f: Float) = plotLeft + f.coerceIn(0f, 1f) * (plotRight - plotLeft)
     private fun xToFreq(x: Float) = ((x - plotLeft) / (plotRight - plotLeft)).coerceIn(0f, 1f)
 
     private fun gainToY(g: Float): Float {
-        val db = (g - 0.5f) * 2f * gainRangeDb
+        val db = rawToGainDb(g)
         return plotBottom - (db + gainRangeDb) / (2 * gainRangeDb) * (plotBottom - plotTop)
     }
     private fun yToGain(y: Float): Float {
         val t = ((plotBottom - y) / (plotBottom - plotTop)).coerceIn(0f, 1f)
         val db = t * (2 * gainRangeDb) - gainRangeDb
-        return (db / (2 * gainRangeDb) + 0.5f).coerceIn(0f, 1f)
+        return gainDbToRaw(db)
+    }
+
+    /**
+     * Прямой перевод дБ -> координата Y. Нужен отдельно от gainToY():
+     * gainToY принимает СЫРОЕ значение ручки (0..1) и сам прогоняет его
+     * через нелинейную шкалу лимба. Суммарная кривая же считается сразу
+     * в дБ, и прогонять её через ту же шкалу второй раз нельзя - это
+     * искажало бы график (ошибка появилась при переходе на нелинейную
+     * шкалу gain и здесь исправлена).
+     */
+    private fun dbToY(db: Float): Float {
+        val clamped = db.coerceIn(-gainRangeDb, gainRangeDb)
+        return plotBottom - (clamped + gainRangeDb) / (2 * gainRangeDb) * (plotBottom - plotTop)
+    }
+
+    /**
+     * Вклад ОДНОЙ полосы в дБ на позиции tx (0..1 по логарифмической оси).
+     * Вынесено в отдельную функцию, чтобы одну и ту же математику
+     * использовали и суммарная кривая, и заливка каждой полосы своим
+     * цветом (как на экране пульта).
+     */
+    private fun bandDbAt(band: Band, bandId: BandId, tx: Float): Float {
+        val bandDb = rawToGainDb(band.gain)
+        val bandXNorm = hzToXNorm(rawToHz(band.freq, bandId))
+        val actualWidth = rawToWidthPublic(band.width)
+        val widthFactor = (actualWidth * octaveNorm).coerceIn(0.008f, 0.5f)
+        // BELL (mode 0/PARAMETRIC) - симметричный колокол. SHELF (1/2/3 -
+        // BRIGHT/CLASSIC/SOFT) - "полка" с разной крутизной перехода.
+        // Реальная акустическая разница между тремя shelf-вариантами
+        // пультом не документирована - это условное визуальное
+        // приближение, чтобы было видно, что режимы разные.
+        val isShelf = band.shapeMode != 0 && (bandId == BandId.BASS || bandId == BandId.TREBLE)
+        val shelfSteepness = when (band.shapeMode) {
+            1 -> widthFactor * 0.5f
+            2 -> widthFactor * 1.0f
+            3 -> widthFactor * 1.8f
+            else -> widthFactor
+        }
+        val influence = if (isShelf && bandId == BandId.BASS) {
+            1f / (1f + Math.E.toFloat().pow((tx - bandXNorm) / shelfSteepness))
+        } else if (isShelf && bandId == BandId.TREBLE) {
+            1f / (1f + Math.E.toFloat().pow(-(tx - bandXNorm) / shelfSteepness))
+        } else {
+            val dist = abs(tx - bandXNorm)
+            Math.E.toFloat().pow(-(dist * dist) / (2 * widthFactor * widthFactor))
+        }
+        return bandDb * influence
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -229,6 +350,41 @@ class EqCurveView @JvmOverloads constructor(
             canvas.drawText("%+d".format(db.toInt()), 2f, y + 7f, axisTextPaint)
         }
 
+        // ЗАЛИВКА КАЖДОЙ ПОЛОСЫ СВОИМ ЦВЕТОМ - как на экране пульта: там
+        // видно не только итоговую кривую, но и вклад каждой полосы
+        // отдельно, залитый её цветом от линии 0 дБ. Сразу понятно, какая
+        // ручка что делает, без вглядывания в суммарную кривую.
+        // Рисуем ПОД суммарной кривой, чтобы она оставалась читаемой.
+        for ((i, band) in bands.withIndex()) {
+            if (!band.active) continue
+            val bandId = bandOrder[i]
+            // Полоса на нуле не даёт вклада - не засоряем график.
+            if (abs(rawToGainDb(band.gain)) < 0.05f) continue
+            val bandPath = Path()
+            val linePath = Path()
+            val zeroY = dbToY(0f)
+            var t = 0f
+            bandPath.moveTo(plotLeft, zeroY)
+            var lineFirst = true
+            while (t <= 1f) {
+                val x = plotLeft + t * (plotRight - plotLeft)
+                val y = dbToY(bandDbAt(band, bandId, t))
+                bandPath.lineTo(x, y)
+                // Отдельный НЕзамкнутый путь под контур: если обводить сам
+                // bandPath, у каждой полосы прочерчивалась бы ещё и линия
+                // нуля через весь график плюс вертикальные края - при
+                // четырёх полосах это превращалось бы в кашу.
+                if (lineFirst) { linePath.moveTo(x, y); lineFirst = false } else linePath.lineTo(x, y)
+                t += 0.01f
+            }
+            bandPath.lineTo(plotRight, zeroY)
+            bandPath.close()
+            bandFillPaint.color = (band.color and 0x00FFFFFF) or (0x40 shl 24)
+            canvas.drawPath(bandPath, bandFillPaint)
+            bandLinePaint.color = (band.color and 0x00FFFFFF) or (0xB0 shl 24)
+            canvas.drawPath(linePath, bandLinePaint)
+        }
+
         val path = Path()
         var first = true
         var tx = 0f
@@ -236,40 +392,7 @@ class EqCurveView @JvmOverloads constructor(
             var totalDb = 0f
             for ((i, band) in bands.withIndex()) {
                 if (!band.active) continue
-                val bandId = bandOrder[i]
-                val bandDb = (band.gain - 0.5f) * 2f * gainRangeDb
-                val bandXNorm = hzToXNorm(rawToHz(band.freq, bandId))
-                // РАНЬШЕ здесь была захардкоженная константа 0.10f - ручка
-                // WIDTH визуально ни на что не влияла, хотя число под ней
-                // менялось. Теперь реальная ширина полосы (0.1-3.0,
-                // подтверждённый диапазон) определяет форму колокола:
-                // больше WIDTH -> шире и положе, меньше -> уже́ и острее.
-                val actualWidth = rawToWidthPublic(band.width)
-                val widthFactor = (actualWidth * octaveNorm).coerceIn(0.008f, 0.5f)
-                // BELL (mode 0/PARAMETRIC) - симметричный колокол, как
-                // раньше. SHELF (mode 1/2/3 - BRIGHT/CLASSIC/SOFT) - "полка"
-                // с разной крутизной перехода: BRIGHT самая резкая, SOFT -
-                // самая плавная, CLASSIC - между ними. Реальная акустическая
-                // разница между тремя shelf-вариантами пультом не
-                // документирована - это условное визуальное приближение,
-                // чтобы хотя бы было заметно, что режимы разные, а не
-                // лабораторно точное воспроизведение.
-                val isShelf = band.shapeMode != 0 && (bandId == BandId.BASS || bandId == BandId.TREBLE)
-                val shelfSteepness = when (band.shapeMode) {
-                    1 -> widthFactor * 0.5f  // BRIGHT - самый резкий переход
-                    2 -> widthFactor * 1.0f  // CLASSIC - средний
-                    3 -> widthFactor * 1.8f  // SOFT - самый плавный
-                    else -> widthFactor
-                }
-                val influence = if (isShelf && bandId == BandId.BASS) {
-                    1f / (1f + Math.E.toFloat().pow((tx - bandXNorm) / shelfSteepness))
-                } else if (isShelf && bandId == BandId.TREBLE) {
-                    1f / (1f + Math.E.toFloat().pow(-(tx - bandXNorm) / shelfSteepness))
-                } else {
-                    val dist = abs(tx - bandXNorm)
-                    Math.E.toFloat().pow(-(dist * dist) / (2 * widthFactor * widthFactor))
-                }
-                totalDb += bandDb * influence
+                totalDb += bandDbAt(band, bandOrder[i], tx)
             }
             // HP/LP - раньше на графике были только перетаскиваемые точки,
             // сам спад никак не показывался. Теперь фильтр реально "режет"
@@ -280,15 +403,22 @@ class EqCurveView @JvmOverloads constructor(
             val steepness = 0.015f
             val filterFloorDb = -60f
             if (hpOn) {
-                val passAbove = 1f / (1f + Math.E.toFloat().pow(-(tx - hpFreq) / steepness))
+                val hpNorm = hzToXNorm(rawToRangeHz(hpFreq, hpHzRange))
+                val passAbove = 1f / (1f + Math.E.toFloat().pow(-(tx - hpNorm) / steepness))
                 totalDb += filterFloorDb * (1f - passAbove)
             }
             if (lpOn) {
-                val passBelow = 1f / (1f + Math.E.toFloat().pow((tx - lpFreq) / steepness))
+                val lpNorm = hzToXNorm(rawToRangeHz(lpFreq, lpHzRange))
+                val passBelow = 1f / (1f + Math.E.toFloat().pow((tx - lpNorm) / steepness))
                 totalDb += filterFloorDb * (1f - passBelow)
             }
             val x = plotLeft + tx * (plotRight - plotLeft)
-            val y = gainToY((totalDb / (2 * gainRangeDb) + 0.5f).coerceIn(0f, 1f))
+            // ИСПРАВЛЕНО: раньше здесь totalDb переводился обратно в
+            // "сырое" значение линейной формулой и подавался в gainToY,
+            // который сам прогоняет его через нелинейную шкалу лимба -
+            // получалось двойное преобразование и искажённая кривая.
+            // Теперь дБ отображаются напрямую.
+            val y = dbToY(totalDb)
             if (first) { path.moveTo(x, y); first = false } else path.lineTo(x, y)
             tx += 0.01f
         }
@@ -297,11 +427,11 @@ class EqCurveView @JvmOverloads constructor(
         // HPF/LPF реально режут сигнал, для наглядности даже без
         // разглядывания самой кривой.
         if (hpOn) {
-            val hpX = freqToX(hpFreq)
+            val hpX = hpToX(hpFreq)
             canvas.drawRect(plotLeft, plotTop, hpX, plotBottom, cutZonePaint)
         }
         if (lpOn) {
-            val lpX = freqToX(lpFreq)
+            val lpX = lpToX(lpFreq)
             canvas.drawRect(lpX, plotTop, plotRight, plotBottom, cutZonePaint)
         }
 
@@ -312,13 +442,13 @@ class EqCurveView @JvmOverloads constructor(
         canvas.drawPath(fillPath, fillPaint)
         canvas.drawPath(path, curvePaint)
 
-        val hpX = freqToX(hpFreq)
+        val hpX = hpToX(hpFreq)
         val hpY = plotBottom - 10f
         nodePaint.color = if (hpOn) Color.parseColor("#34c759") else Color.parseColor("#666666")
         canvas.drawCircle(hpX, hpY, 14f, nodePaint)
         canvas.drawCircle(hpX, hpY, 14f, nodeStrokePaint)
 
-        val lpX = freqToX(lpFreq)
+        val lpX = lpToX(lpFreq)
         nodePaint.color = if (lpOn) Color.parseColor("#af52de") else Color.parseColor("#666666")
         canvas.drawCircle(lpX, hpY, 14f, nodePaint)
         canvas.drawCircle(lpX, hpY, 14f, nodeStrokePaint)
@@ -348,12 +478,14 @@ class EqCurveView @JvmOverloads constructor(
                 if (draggingNode == -3) return false
                 when {
                     draggingNode == -1 -> {
-                        val freq = xToFreq(event.x)
+                        // Через реальный диапазон 10-400 Гц, а не всю ось.
+                        val freq = xToHpRaw(event.x)
                         hpFreq = freq
                         onNodeDragged?.invoke(-1, freq, 0f)
                     }
                     draggingNode == -2 -> {
-                        val freq = xToFreq(event.x)
+                        // Через реальный диапазон 2-20 кГц, а не всю ось.
+                        val freq = xToLpRaw(event.x)
                         lpFreq = freq
                         onNodeDragged?.invoke(-2, freq, 0f)
                     }
@@ -387,11 +519,11 @@ class EqCurveView @JvmOverloads constructor(
             val d = distance(x, y, bx, by)
             if (d < touchRadius && d < bestDist) { best = i; bestDist = d }
         }
-        val hpX = freqToX(hpFreq)
+        val hpX = hpToX(hpFreq)
         val hpY = plotBottom - 10f
         val dHp = distance(x, y, hpX, hpY)
         if (dHp < touchRadius && dHp < bestDist) { best = -1; bestDist = dHp }
-        val lpX = freqToX(lpFreq)
+        val lpX = lpToX(lpFreq)
         val dLp = distance(x, y, lpX, hpY)
         if (dLp < touchRadius && dLp < bestDist) { best = -2; bestDist = dLp }
         return best

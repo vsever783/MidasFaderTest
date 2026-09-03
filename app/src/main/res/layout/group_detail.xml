@@ -9,7 +9,6 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fitsSystemWindows="true"
     android:orientation="vertical"
     android:background="#000000">
 
@@ -22,6 +21,7 @@
         android:padding="12dp">
 
         <Button
+            style="@style/Widget.Midas.Button"
             android:id="@+id/btnGroupDetailBack"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -48,6 +48,7 @@
         android:background="#1c1c1e">
 
         <Button
+            style="@style/Widget.Midas.Button"
             android:id="@+id/btnGroupTabComp"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -67,6 +68,7 @@
             android:background="#3a3a3c" />
 
         <Button
+            style="@style/Widget.Midas.Button"
             android:id="@+id/btnGroupTabEq"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -142,6 +144,7 @@
                 android:textColor="#ffffff" />
 
             <Button
+                style="@style/Widget.Midas.Button"
                 android:id="@+id/groupDetailMute"
                 android:layout_width="match_parent"
                 android:layout_height="30dp"
@@ -157,6 +160,7 @@
             <!-- LINK (стерео-пара) - ПОДТВЕРЖДЕНО реальным захватом трафика
                  (enConfigPairingState), поведение конкретно не проверялось. -->
             <Button
+                style="@style/Widget.Midas.Button"
                 android:id="@+id/groupDetailLink"
                 android:layout_width="match_parent"
                 android:layout_height="26dp"

@@ -1,0 +1,218 @@
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/ConnectionHolder.kt	2026-08-19 22:25:45.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/ConnectionHolder.kt	2026-08-28 06:42:45.436134798 +0000
+@@ -80,6 +80,41 @@
+     // соответствующий экран (см. openVcaMembers/subscribeVcaMembers).
+     val vcaMemberSubscriptions = mutableMapOf<String, VcaMemberSub>()
+ 
++    /**
++     * Единая точка очистки ВСЕГО состояния подписок.
++     *
++     * ИСПРАВЛЕНИЕ БАГА: раньше очистка была размазана по трём местам
++     * (reset() здесь, блок переподключения в MainActivityNetwork,
++     * onDestroy в MainActivity), и каждое место чистило СВОЙ набор карт.
++     * В итоге mainOutExtrasSubscribed и auxBusExtrasSubscribed не
++     * очищались НИГДЕ, а vcaMemberSubscriptions - не очищалась при
++     * переподключении. Последствие: после переподключения или смены
++     * режима эти "сторожевые" множества оставались заполненными,
++     * subscribeMainOutExtras/subscribeAuxBusExtras сразу выходили по
++     * `if (...Subscribed.contains(index)) return`, и детальные экраны
++     * MATRIX и AUX больше никогда не переподписывались - показывали
++     * старые значения и не обновлялись до перезапуска приложения.
++     *
++     * Теперь любое место, где сессия начинается заново, вызывает этот
++     * метод - добавить новую карту и забыть её очистить больше нельзя.
++     */
++    fun clearAllSubscriptionState() {
++        subscriptions.clear()
++        masterSubscriptions.clear()
++        auxSubscriptions.clear()
++        auxBusSubscriptions.clear()
++        vcaSubscriptions.clear()
++        mainOutSubscriptions.clear()
++        vcaMemberSubscriptions.clear()
++        auxSendsSubscribed.clear()
++        eqSubscribed.clear()
++        gateSubscribed.clear()
++        inputExtrasSubscribed.clear()
++        compGateExtrasSubscribed.clear()
++        mainOutExtrasSubscribed.clear()
++        auxBusExtrasSubscribed.clear()
++    }
++
+     fun reset() {
+         socket = null
+         receiveJob = null
+@@ -87,6 +122,6 @@
+         consoleAddress = null
+         sessionToken = null
+         subscribedAlready = false
+-        subscriptions.clear()
++        clearAllSubscriptionState()
+     }
+ }
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/OscUtil.kt	2026-08-12 12:14:50.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/OscUtil.kt	2026-08-28 06:43:32.097230307 +0000
+@@ -133,32 +133,48 @@
+                 OscElement.Bundle(timeTag, elements)
+             } else {
+                 var pos = offset
+-                val (address, afterAddress) = readOscString(bytes, pos)
++                val (address, afterAddress) = readOscString(bytes, pos, end)
+                 pos = afterAddress
+                 if (pos >= end || bytes[pos] != ','.code.toByte()) {
+                     return OscElement.Message(address, null, emptyList())
+                 }
+-                val (typeTag, afterTag) = readOscString(bytes, pos)
++                val (typeTag, afterTag) = readOscString(bytes, pos, end)
+                 pos = afterTag
+                 val args = mutableListOf<Any>()
+                 for (tag in typeTag.drop(1)) {
+                     when (tag) {
+                         'i' -> {
++                            // Проверка границы: тайп-таг приходит от пульта и
++                            // может не соответствовать реальному объёму данных
++                            // в элементе. Без проверки читали бы байты соседнего
++                            // элемента бандла как значение.
++                            if (pos + 4 > end) return OscElement.Message(address, typeTag, args)
+                             args.add(ByteBuffer.wrap(bytes, pos, 4).int)
+                             pos += 4
+                         }
+                         'f' -> {
++                            if (pos + 4 > end) return OscElement.Message(address, typeTag, args)
+                             args.add(ByteBuffer.wrap(bytes, pos, 4).float)
+                             pos += 4
+                         }
+                         's' -> {
+-                            val (s, newOffset) = readOscString(bytes, pos)
++                            val (s, newOffset) = readOscString(bytes, pos, end)
+                             args.add(s)
+                             pos = newOffset
+                         }
+                         'b' -> {
++                            if (pos + 4 > end) return OscElement.Message(address, typeTag, args)
+                             val blobLen = ByteBuffer.wrap(bytes, pos, 4).int
+                             pos += 4
++                            // Длина блоба приходит по сети. Отрицательная или
++                            // выходящая за элемент длина раньше приводила к
++                            // исключению в copyOfRange, а значит - к молчаливой
++                            // потере ВСЕГО пакета (весь decodeElement возвращал
++                            // null). Теперь просто останавливаем разбор
++                            // аргументов, сохранив то, что уже успели прочитать.
++                            if (blobLen < 0 || pos + blobLen > end) {
++                                return OscElement.Message(address, typeTag, args)
++                            }
+                             val blob = bytes.copyOfRange(pos, pos + blobLen)
+                             args.add(blob)
+                             pos += blobLen + padLen(blobLen)
+@@ -193,9 +209,20 @@
+         return if (padLen == 0) bytes else bytes + ByteArray(padLen)
+     }
+ 
+-    private fun readOscString(bytes: ByteArray, offset: Int): Pair<String, Int> {
++    /**
++     * @param limit граница, за которую нельзя заходить при поиске
++     *        нуль-терминатора. По умолчанию - конец массива.
++     *
++     * ИСПРАВЛЕНИЕ: раньше поиск нуля шёл без верхней границы вообще.
++     * Внутри бандла это позволяло "перепрыгнуть" конец текущего элемента и
++     * начать читать байты СЛЕДУЮЩЕГО элемента как продолжение строки, а на
++     * пакете без нуль-терминатора - выйти за пределы массива (исключение
++     * ловилось выше, но при этом молча терялся весь пакет целиком).
++     */
++    private fun readOscString(bytes: ByteArray, offset: Int, limit: Int = bytes.size): Pair<String, Int> {
+         var end = offset
+-        while (bytes[end] != 0.toByte()) end++
++        while (end < limit && bytes[end] != 0.toByte()) end++
++        if (end >= limit) throw IllegalArgumentException("OSC string not terminated within bounds")
+         val s = String(bytes, offset, end - offset, Charsets.US_ASCII)
+         val totalWithNull = end - offset + 1
+         val rem = totalWithNull % 4
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/MainActivityNetwork.kt	2026-08-23 19:37:04.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/MainActivityNetwork.kt	2026-08-28 06:43:40.029237679 +0000
+@@ -185,17 +185,12 @@
+             withContext(Dispatchers.Main) {
+                 sessionToken = null
+                 subscribedAlready = false
+-                subscriptions.clear()
+-                masterSubscriptions.clear()
+-                auxSubscriptions.clear()
+-                auxBusSubscriptions.clear()
+-                vcaSubscriptions.clear()
+-                mainOutSubscriptions.clear()
+-                auxSendsSubscribed.clear()
+-                eqSubscribed.clear()
+-                gateSubscribed.clear()
+-                inputExtrasSubscribed.clear()
+-                compGateExtrasSubscribed.clear()
++                // ИСПРАВЛЕНИЕ: раньше здесь перечислялись карты вручную и
++                // ТРИ из них забывались (vcaMemberSubscriptions,
++                // mainOutExtrasSubscribed, auxBusExtrasSubscribed) - из-за
++                // чего детальные экраны MATRIX/AUX после переподключения
++                // больше не переподписывались. Теперь одна общая функция.
++                ConnectionHolder.clearAllSubscriptionState()
+                 sessionId = System.currentTimeMillis().toString(36)
+             }
+ 
+@@ -323,7 +318,14 @@
+ 
+     internal fun MainActivity.startReceiveLoop(socket: DatagramSocket) {
+         receiveJob = CoroutineScope(Dispatchers.IO).launch {
+-            val buffer = ByteArray(4096)
++            // ИСПРАВЛЕНИЕ: было 4096. DatagramPacket обрезает датаграмму по
++            // размеру буфера МОЛЧА - без исключения и без признака обрезки.
++            // Обрезанный бандл потом разбирается частично (парсер упирается
++            // в `pos + size > end` и прекращает разбор), то есть часть
++            // обновлений просто теряется, причём тем чаще, чем больше
++            // подписок. 64 КБ - максимальный размер UDP-датаграммы, так что
++            // обрезка исключена в принципе.
++            val buffer = ByteArray(65536)
+             socket.soTimeout = 1000
+             while (isActive) {
+                 try {
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/MainActivity.kt	2026-08-24 12:12:15.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/MainActivity.kt	2026-08-28 06:42:58.919311585 +0000
+@@ -4661,18 +4661,12 @@
+             }
+             receiveJob?.cancel()
+             pollJob?.cancel()
+-            subscriptions.clear()
+-            masterSubscriptions.clear()
+-            auxSubscriptions.clear()
+-            auxBusSubscriptions.clear()
+-            vcaSubscriptions.clear()
+-            mainOutSubscriptions.clear()
+-            ConnectionHolder.vcaMemberSubscriptions.clear()
+-            auxSendsSubscribed.clear()
+-            eqSubscribed.clear()
+-            gateSubscribed.clear()
+-            inputExtrasSubscribed.clear()
+-            compGateExtrasSubscribed.clear()
++            // ИСПРАВЛЕНИЕ: раньше карты перечислялись здесь вручную и две
++            // из них (mainOutExtrasSubscribed, auxBusExtrasSubscribed) не
++            // очищались - после смены режима детальные экраны MATRIX и AUX
++            // считали себя уже подписанными и молча переставали
++            // обновляться. Теперь одна общая функция.
++            ConnectionHolder.clearAllSubscriptionState()
+             // Сбрасываем ТОЛЬКО признак подписки - следующий режим (при
+             // входе в MainActivity заново) должен подписаться с нуля под
+             // себя, а не решить, что он "восстанавливается после поворота".
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/Pro2Commands.kt	2026-08-23 19:37:04.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/Pro2Commands.kt	2026-08-28 06:43:45.164050272 +0000
+@@ -687,13 +687,13 @@
+     fun mainOutCompStyleCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompStyle"
+     fun setMainOutCompStyleNext(index: Int): ByteArray = OscUtil.encode(mainOutCompStyleCycleAddress(), listOf(index, 1))
+ 
+-    fun mainOutCompFilterBandwidthAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidthCycle"
+-    fun mainOutCompFilterBandwidthCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidthCycle"
++    fun mainOutCompFilterBandwidthAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidth"
++    fun mainOutCompFilterBandwidthCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidth"
+     fun setMainOutCompFilterBandwidthNext(index: Int): ByteArray =
+         OscUtil.encode(mainOutCompFilterBandwidthCycleAddress(), listOf(index, 1))
+ 
+-    fun mainOutCompKneeAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimKneeCycle"
+-    fun mainOutCompKneeCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimKneeCycle"
++    fun mainOutCompKneeAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimKnee"
++    fun mainOutCompKneeCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimKnee"
+     fun setMainOutCompKneeNext(index: Int): ByteArray = OscUtil.encode(mainOutCompKneeCycleAddress(), listOf(index, 1))
+ 
+     // === Aux-шина - LINK (стерео-пара). ПОДТВЕРЖДЕНО реальным захватом

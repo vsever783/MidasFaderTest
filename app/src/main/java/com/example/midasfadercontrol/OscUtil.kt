@@ -133,32 +133,48 @@ object OscUtil {
                 OscElement.Bundle(timeTag, elements)
             } else {
                 var pos = offset
-                val (address, afterAddress) = readOscString(bytes, pos)
+                val (address, afterAddress) = readOscString(bytes, pos, end)
                 pos = afterAddress
                 if (pos >= end || bytes[pos] != ','.code.toByte()) {
                     return OscElement.Message(address, null, emptyList())
                 }
-                val (typeTag, afterTag) = readOscString(bytes, pos)
+                val (typeTag, afterTag) = readOscString(bytes, pos, end)
                 pos = afterTag
                 val args = mutableListOf<Any>()
                 for (tag in typeTag.drop(1)) {
                     when (tag) {
                         'i' -> {
+                            // Проверка границы: тайп-таг приходит от пульта и
+                            // может не соответствовать реальному объёму данных
+                            // в элементе. Без проверки читали бы байты соседнего
+                            // элемента бандла как значение.
+                            if (pos + 4 > end) return OscElement.Message(address, typeTag, args)
                             args.add(ByteBuffer.wrap(bytes, pos, 4).int)
                             pos += 4
                         }
                         'f' -> {
+                            if (pos + 4 > end) return OscElement.Message(address, typeTag, args)
                             args.add(ByteBuffer.wrap(bytes, pos, 4).float)
                             pos += 4
                         }
                         's' -> {
-                            val (s, newOffset) = readOscString(bytes, pos)
+                            val (s, newOffset) = readOscString(bytes, pos, end)
                             args.add(s)
                             pos = newOffset
                         }
                         'b' -> {
+                            if (pos + 4 > end) return OscElement.Message(address, typeTag, args)
                             val blobLen = ByteBuffer.wrap(bytes, pos, 4).int
                             pos += 4
+                            // Длина блоба приходит по сети. Отрицательная или
+                            // выходящая за элемент длина раньше приводила к
+                            // исключению в copyOfRange, а значит - к молчаливой
+                            // потере ВСЕГО пакета (весь decodeElement возвращал
+                            // null). Теперь просто останавливаем разбор
+                            // аргументов, сохранив то, что уже успели прочитать.
+                            if (blobLen < 0 || pos + blobLen > end) {
+                                return OscElement.Message(address, typeTag, args)
+                            }
                             val blob = bytes.copyOfRange(pos, pos + blobLen)
                             args.add(blob)
                             pos += blobLen + padLen(blobLen)
@@ -193,9 +209,20 @@ object OscUtil {
         return if (padLen == 0) bytes else bytes + ByteArray(padLen)
     }
 
-    private fun readOscString(bytes: ByteArray, offset: Int): Pair<String, Int> {
+    /**
+     * @param limit граница, за которую нельзя заходить при поиске
+     *        нуль-терминатора. По умолчанию - конец массива.
+     *
+     * ИСПРАВЛЕНИЕ: раньше поиск нуля шёл без верхней границы вообще.
+     * Внутри бандла это позволяло "перепрыгнуть" конец текущего элемента и
+     * начать читать байты СЛЕДУЮЩЕГО элемента как продолжение строки, а на
+     * пакете без нуль-терминатора - выйти за пределы массива (исключение
+     * ловилось выше, но при этом молча терялся весь пакет целиком).
+     */
+    private fun readOscString(bytes: ByteArray, offset: Int, limit: Int = bytes.size): Pair<String, Int> {
         var end = offset
-        while (bytes[end] != 0.toByte()) end++
+        while (end < limit && bytes[end] != 0.toByte()) end++
+        if (end >= limit) throw IllegalArgumentException("OSC string not terminated within bounds")
         val s = String(bytes, offset, end - offset, Charsets.US_ASCII)
         val totalWithNull = end - offset + 1
         val rem = totalWithNull % 4

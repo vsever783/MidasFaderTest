@@ -32,6 +32,8 @@ class ConnectActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_connect)
+        // Отступы под системные панели - см. SystemInsets.kt
+        findViewById<android.view.View>(android.R.id.content).applySystemBarInsets()
         supportActionBar?.hide()
         applyBlackSystemBars()
 
@@ -82,7 +84,11 @@ class ConnectActivity : AppCompatActivity() {
                     ConnectionHolder.consolePort = port
                     ConnectionHolder.sessionId = System.currentTimeMillis().toString(36)
                     ConnectionHolder.sessionToken = null
-                    ConnectionHolder.subscribedAlready = false
+                    // Не `subscribedAlready = false`: признак хранится в
+                    // атомарном замке, и сбрасывать надо именно его -
+                    // иначе новая сессия не подпишется (см. заметку в
+                    // MainActivity.onDestroy).
+                    ConnectionHolder.releaseSubscribeGate()
 
                     withContext(Dispatchers.Main) {
                         goToRoleSelect()

@@ -2,7 +2,6 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fitsSystemWindows="true"
     android:orientation="vertical"
     android:background="#000000">
 
@@ -16,6 +15,7 @@
         android:padding="12dp">
 
         <Button
+            style="@style/Widget.Midas.Button"
             android:id="@+id/btnDetailBack"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -53,6 +53,7 @@
 
         <Button
             android:id="@+id/btnTabInput"
+            style="@style/Widget.Midas.Button.Tab"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:minWidth="0dp"
@@ -74,7 +75,24 @@
             android:background="#3a3a3c" />
 
         <Button
+            android:id="@+id/btnTabRouting"
+            style="@style/Widget.Midas.Button.Tab"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
+            android:background="@android:color/transparent"
+            android:text="ROUTING"
+            android:textColor="#8e8e93"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <Button
             android:id="@+id/btnTabComp"
+            style="@style/Widget.Midas.Button.Tab"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:minWidth="0dp"
@@ -95,6 +113,7 @@
 
         <Button
             android:id="@+id/btnTabSends"
+            style="@style/Widget.Midas.Button.Tab"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:minWidth="0dp"
@@ -115,6 +134,7 @@
 
         <Button
             android:id="@+id/btnTabEq"
+            style="@style/Widget.Midas.Button.Tab"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:minWidth="0dp"
@@ -135,6 +155,7 @@
 
         <Button
             android:id="@+id/btnTabGate"
+            style="@style/Widget.Midas.Button.Tab"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:minWidth="0dp"
@@ -268,6 +289,7 @@
                     android:layout_marginTop="12dp">
 
                     <Button
+                        style="@style/Widget.Midas.Button"
                         android:id="@+id/btnDetailPhantom"
                         android:background="@drawable/console_button_background"
                         android:layout_width="0dp"
@@ -281,6 +303,7 @@
                         android:backgroundTint="#3a3a3c" />
 
                     <Button
+                        style="@style/Widget.Midas.Button"
                         android:id="@+id/btnDetailPhase"
                         android:background="@drawable/console_button_background"
                         android:layout_width="0dp"
@@ -295,6 +318,7 @@
 
                 <!-- Стерео-пара (link) - НЕ подтверждено реальным захватом. -->
                 <Button
+                    style="@style/Widget.Midas.Button"
                     android:id="@+id/btnDetailLink"
                     android:background="@drawable/console_button_background"
                     android:layout_width="match_parent"
@@ -306,11 +330,12 @@
                     android:textColor="#ffffff"
                     android:backgroundTint="#3a3a3c" />
 
-                <!-- Патчинг (какой физический вход подключён) - ТОЛЬКО
-                     ЧТЕНИЕ, сырое число. Кодировка не расшифрована - см.
-                     заметку у Pro2Commands.channelSourceAddress(). Пока
-                     полезно только чтобы собрать данные: смотреть, как
-                     меняется число при ручном патчинге на самом пульте. -->
+                <!-- Патчинг (какой физический вход подключён к каналу).
+                     Кодировка расшифрована (уровень A), запись подтверждена
+                     реальным трафиком (4 записи, каждая с эхом от пульта) -
+                     см. подробности у Pro2Commands.channelSourceAddress().
+                     Спрятан за диалогом с двойным подтверждением: смена
+                     патча меняет реальную маршрутизацию звука на пульте. -->
                 <TextView
                     android:id="@+id/textDetailChannelSource"
                     android:layout_width="match_parent"
@@ -322,6 +347,54 @@
                     android:gravity="center"
                     android:layout_marginTop="8dp" />
 
+                <Button
+                    style="@style/Widget.Midas.Button"
+                    android:id="@+id/btnDetailPatch"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="ПАТЧИНГ"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="#ffffff"
+                    android:backgroundTint="#3a3a3c" />
+
+            </LinearLayout>
+
+            <!-- ВКЛАДКА ROUTING. Выделена из INPUT: вместе они не помещались
+                 на один экран без прокрутки, а прокрутка допустима только
+                 при выборе канала. Здесь всё, что относится к маршрутизации
+                 и обработке на входе: панорама, имя/цвет, фильтры, задержка
+                 и назначение в мьют-группы. -->
+            <LinearLayout
+                android:id="@+id/routingBlockContent"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_margin="12dp"
+                android:background="@drawable/card_panel_background"
+                android:orientation="vertical"
+                android:gravity="center_horizontal"
+                android:padding="12dp"
+                android:visibility="gone">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="@integer/detail_columns_orientation">
+
+                <!-- Колонка. Ширина match_parent + weight=1: в альбомной
+                     (wrapper horizontal) это даёт две равные половины, в
+                     портретной (wrapper vertical) - полную ширину. С 0dp
+                     в портретной колонка схлопнулась бы в ноль. -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:gravity="center_horizontal"
+                    android:orientation="vertical">
+
+
                 <!-- Панорама - ПОДТВЕРЖДЕНО реальным захватом. -->
                 <TextView
                     android:layout_width="wrap_content"
@@ -331,12 +404,11 @@
                     android:textStyle="bold"
                     android:textSize="12sp"
                     android:layout_marginTop="12dp" />
-                <SeekBar
+                <com.example.midasfadercontrol.RotaryKnobView
                     android:id="@+id/seekDetailPan"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:max="1000"
-                    android:progress="500" />
+                    android:layout_width="@dimen/channel_knob_size"
+                    android:layout_height="@dimen/channel_knob_size"
+                    android:layout_gravity="center_horizontal" />
                 <TextView
                     android:id="@+id/textDetailPanValue"
                     android:layout_width="wrap_content"
@@ -363,6 +435,7 @@
                         android:maxLines="1" />
 
                     <Button
+                        style="@style/Widget.Midas.Button"
                         android:id="@+id/btnDetailApplyName"
                         android:background="@drawable/console_button_background"
                         android:layout_width="wrap_content"
@@ -388,6 +461,21 @@
                     android:layout_height="36dp"
                     android:orientation="horizontal" />
 
+                </LinearLayout>
+
+                <!-- Колонка. Ширина match_parent + weight=1: в альбомной
+                     (wrapper horizontal) это даёт две равные половины, в
+                     портретной (wrapper vertical) - полную ширину. С 0dp
+                     в портретной колонка схлопнулась бы в ноль. -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:gravity="center_horizontal"
+                    android:orientation="vertical">
+
                 <!-- HP/LP фильтры и задержка входа - ПОДТВЕРЖДЕНО реальным
                      захватом. Крутизна (slope) не реализована - отдельный
                      циклический параметр, не непрерывное значение. -->
@@ -398,6 +486,7 @@
                     android:layout_marginTop="12dp">
 
                     <Button
+                        style="@style/Widget.Midas.Button"
                         android:id="@+id/btnDetailHpFilterIn"
                         android:background="@drawable/console_button_background"
                         android:layout_width="0dp"
@@ -411,6 +500,7 @@
                         android:backgroundTint="#3a3a3c" />
 
                     <Button
+                        style="@style/Widget.Midas.Button"
                         android:id="@+id/btnDetailLpFilterIn"
                         android:background="@drawable/console_button_background"
                         android:layout_width="0dp"
@@ -431,12 +521,11 @@
                     android:textStyle="bold"
                     android:textSize="11sp"
                     android:layout_marginTop="12dp" />
-                <SeekBar
+                <com.example.midasfadercontrol.RotaryKnobView
                     android:id="@+id/seekDetailHpFreq"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:max="1000"
-                    android:progress="0" />
+                    android:layout_width="@dimen/channel_knob_size"
+                    android:layout_height="@dimen/channel_knob_size"
+                    android:layout_gravity="center_horizontal" />
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -446,12 +535,11 @@
                     android:textStyle="bold"
                     android:textSize="11sp"
                     android:layout_marginTop="12dp" />
-                <SeekBar
+                <com.example.midasfadercontrol.RotaryKnobView
                     android:id="@+id/seekDetailLpFreq"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:max="1000"
-                    android:progress="1000" />
+                    android:layout_width="@dimen/channel_knob_size"
+                    android:layout_height="@dimen/channel_knob_size"
+                    android:layout_gravity="center_horizontal" />
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -461,13 +549,15 @@
                     android:textStyle="bold"
                     android:textSize="11sp"
                     android:layout_marginTop="12dp" />
-                <SeekBar
+                <com.example.midasfadercontrol.RotaryKnobView
                     android:id="@+id/seekDetailDelay"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:max="1000"
-                    android:progress="0" />
+                    android:layout_width="@dimen/channel_knob_size"
+                    android:layout_height="@dimen/channel_knob_size"
+                    android:layout_gravity="center_horizontal" />
 
+
+                </LinearLayout>
+                </LinearLayout>
             </LinearLayout>
 
             <LinearLayout
@@ -573,6 +663,7 @@
                 android:textColor="#ffffff" />
 
             <Button
+                style="@style/Widget.Midas.Button"
                 android:id="@+id/detailMute"
                 android:background="@drawable/console_button_background"
                 android:layout_width="match_parent"

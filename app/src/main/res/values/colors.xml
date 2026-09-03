@@ -3,4 +3,28 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
     <color name="ic_launcher_background">#141416</color>
+
+    <!--
+        ЕДИНАЯ ПАЛИТРА "КОНСОЛИ".
+
+        Раньше эти значения были рассыпаны по разметке и коду литералами
+        (#ff9f0a встречался десятки раз, #3a3a3c - ещё чаще). Оттенки
+        местами разъезжались, а поменять акцентный цвет разом было
+        невозможно. Имена описывают РОЛЬ, а не оттенок.
+    -->
+    <color name="console_bg">#000000</color>
+    <color name="console_panel">#1c1c1e</color>
+    <color name="console_button_idle">#3a3a3c</color>
+
+    <color name="console_text_primary">#ffffff</color>
+    <color name="console_text_secondary">#8e8e93</color>
+
+    <color name="console_accent">#ff9f0a</color>
+    <color name="console_danger">#ff3b30</color>
+    <color name="console_solo">#ffcc00</color>
+
+    <color name="eq_band_bass">#ff3b30</color>
+    <color name="eq_band_low_mid">#ffcc00</color>
+    <color name="eq_band_high_mid">#34c759</color>
+    <color name="eq_band_treble">#0a84ff</color>
 </resources>

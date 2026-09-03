@@ -72,30 +72,83 @@ object Pro2Commands {
     // ("unknown") - нужна проверка на реальном пульте.
     fun linkAddress() = "/enPPCSwitchMessage/$GROUP/enChannelLinked"
 
-    // === Патчинг (какой физический вход подключён к каналу) - ТОЛЬКО
-    // ЧТЕНИЕ, специально без set-функции. Подтверждено найденным в архиве
-    // Pro2 Offline Editor, что значение - составная упакованная структура
-    // (тип устройства + DeviceID + номер карты через битовые поля), а не
-    // простой номер входа - без расшифрованной формулы отправка
-    // произвольного числа рискует переключить канал на неожиданный
-    // физический вход прямо во время живого выступления. Сначала собираем
-    // данные (какое число соответствует какому реальному входу), потом
-    // добавим запись.
+    // === ПАТЧИНГ ВХОДА (enChannelSource) - кодировка РАСШИФРОВАНА, уровень A.
+    //
+    // Значение - 32-битное беззнаковое:
+    //     uSource = Type            (биты 0-7,  младший байт)
+    //             | path    << 8    (биты 8-19, 12 бит)
+    //             | Channel << 20   (биты 20-27, 8 бит)
+    // Отдельный флаг 0x80000000 = Silence Bit (источник не назначен).
+    //
+    // Подтверждено четырьмя независимыми путями: разбор Mac Offline Editor,
+    // SceneData::ConvertDSPSource, CSystemInputSource::Assign в реальной
+    // прошивке, и живой сетевой трафик с Pro2 (12 точек по DL251, обе
+    // границы; 3 точки по локальным входам).
+    //
+    // ВАЖНО про запись: формат записи отдельно не наблюдался в захватах,
+    // НО enChannelColour - параметр того же типа (enPPCIntegerMessage), в
+    // той же группе, и его запись тегами ",ii" (индекс канала + int32
+    // значение) давно работает на реальном пульте. Поэтому пишем так же.
     fun channelSourceAddress() = "/enPPCIntegerMessage/$GROUP/enChannelSource"
-    // ПОДТВЕРЖДЕНО реальным трафиком Mixtender 2 (перехват "TRIM" ручки на канале 32):
-    // адрес enInputGain НЕ используется приложением для этой ручки вообще -
-    // реально используется enMicSplitStepGain. Обозначение в JSON-файле muffeeee
-    // ("Sets channel input gain" для enInputGain) оказалось не тем, что физически
-    // происходит при вращении ручки TRIM в реальном приложении - имя параметра
-    // в оф. списке говорит про "micsplit return gain", но по факту именно он
-    // управляет тем, что в интерфейсе выглядит как input gain trim.
-    // ВАЖНО: на пульте на самом деле ДВА разных гейна (подтверждено реальным
-    // захватом обоих):
-    // - enInputGain - основной входной GAIN (аналоговый преамп)
-    // - enMicSplitStepGain - GAIN TRIM (доп. подстройка). Раньше мы по
-    //   ошибке называли ЭТОТ параметр просто "GAIN" - на самом деле это TRIM.
-    fun gainAddress() = "/enPPCRotaryMessage/$GROUP/enInputGain"
-    fun gainTrimAddress() = "/enPPCRotaryMessage/$GROUP/enMicSplitStepGain"
+
+    /** Источник не назначен (распатчено). */
+    const val SOURCE_SILENCE: Int = -2147483648 // 0x80000000
+
+    /** DL251 (Type 42), сквозной физический канал 1..48, path всегда 0. */
+    fun dl251Source(physicalChannel: Int): Int =
+        42 or ((physicalChannel - 1) shl 20)
+
+    /** Локальный вход поверхности (Type 14 LineIOCPU, path 17), вход 1..8. */
+    fun localInputSource(physicalInput: Int): Int =
+        0x110e or ((physicalInput - 1) shl 20)
+
+    /**
+     * Человекочитаемая расшифровка uSource. Возвращает null, если значение
+     * не соответствует ни одной ПОДТВЕРЖДЁННОЙ трафиком форме - в этом
+     * случае наверху показываем сырое число, а не выдумываем подпись.
+     */
+    fun describeSource(uSource: Int): String? {
+        if (uSource == SOURCE_SILENCE) return "не назначен"
+        if (uSource < 0) return null
+        val type = uSource and 0xFF
+        val path = (uSource shr 8) and 0xFFF
+        val channel = (uSource shr 20) and 0xFF
+        return when {
+            type == 42 && path == 0 && channel <= 47 -> "DL251 ch ${channel + 1}"
+            type == 14 && path == 17 && channel <= 7 -> "Локальный вход ${channel + 1}"
+            else -> null
+        }
+    }
+
+    /**
+     * ЗАПИСЬ патчинга. Вызывать только осознанно - меняет реальную
+     * маршрутизацию звука на пульте.
+     */
+    fun setChannelSource(channelIndex: Int, uSource: Int): ByteArray =
+        OscUtil.encode(channelSourceAddress(), listOf(channelIndex, uSource))
+
+    // === ДВА ГЕЙНА НА КАНАЛЕ: enInputGain и enMicSplitStepGain.
+    //
+    // РАЗРЕШЕНО ОФИЦИАЛЬНЫМ МАНУАЛОМ PRO2 - привязка ниже верная:
+    //   * enMicSplitStepGain = "stage box control knob ... adjusts the
+    //     input gain of the remote amplifier in 5dB steps, ranging from
+    //     -5dB to +40dB" (стр. 251). Это аналоговый гейн преампа на
+    //     стейджбоксе - то есть настоящий GAIN. Само имя параметра
+    //     ("StepGain") сходится с шаговой регулировкой по 5 дБ.
+    //   * enInputGain = "console digital trim (gives +20dB to -40dB
+    //     continuous trim)" (стр. 70). Это цифровой ТРИМ.
+    //
+    // Тем самым снято противоречие, о котором я предупреждал: более
+    // раннее наблюдение по трафику Mixtender ("TRIM шлёт
+    // enMicSplitStepGain") было ошибочным. На пульте обе ручки физически
+    // подписаны "gain trim" и переключаются кнопкой SWAP - вероятно,
+    // поэтому при захвате их и перепутали.
+    //
+    // ⚠ Диапазоны РАЗНЫЕ и пока не откалиброваны: GAIN шагами по 5 дБ
+    // (-5..+40), TRIM непрерывный (-40..+20). Сейчас обе ручки
+    // показывают сырые 0.00-1.00.
+    fun gainAddress() = "/enPPCRotaryMessage/$GROUP/enMicSplitStepGain"
+    fun gainTrimAddress() = "/enPPCRotaryMessage/$GROUP/enInputGain"
     fun nameAddress() = "/enPPCStringMessage/$GROUP/enPathname"
     fun colourAddress() = "/enPPCIntegerMessage/$GROUP/enChannelColour"
     // Подтверждено реальным трафиком (метры в самом начале проекта): только чтение,
@@ -113,7 +166,27 @@ object Pro2Commands {
 
     // === HP/LP фильтры и задержка входа - ПОДТВЕРЖДЕНО реальным трафиком iPad. ===
     fun hpFilterInAddress() = "/enPPCSwitchMessage/$GROUP/enInputHighPassFltIn"
+
+    // Крутизна фильтров - переключатель SLOPE на пульте. Мануал (стр. 314):
+    // hi pass 12 или 24 дБ/окт, lo pass 6 или 12 дБ/окт. В датазете оба
+    // описаны как "Cycle channel input ... filter slopes" - то есть
+    // циклическая кнопка, шлём константу 1, пульт сам переключает.
+    // Адреса ЧТЕНИЯ текущей крутизны (enPPCIntegerMessage) уже объявлены
+    // ниже - hpFilterSlopeAddress/lpFilterSlopeAddress. Здесь - адреса
+    // ПЕРЕКЛЮЧЕНИЯ, тот же параметр, но Switch-тип: тот же приём, что уже
+    // используется для режимов компрессора и гейта.
+    fun hpFilterSlopeCycleAddress() = "/enPPCSwitchMessage/$GROUP/enInputHighPassFltSlope"
+    fun lpFilterSlopeCycleAddress() = "/enPPCSwitchMessage/$GROUP/enInputLowPassFltSlope"
+    fun setHpFilterSlopeNext(channelIndex: Int): ByteArray =
+        OscUtil.encode(hpFilterSlopeCycleAddress(), listOf(channelIndex, 1))
+    fun setLpFilterSlopeNext(channelIndex: Int): ByteArray =
+        OscUtil.encode(lpFilterSlopeCycleAddress(), listOf(channelIndex, 1))
     fun hpFilterFreqAddress() = "/enPPCRotaryMessage/$GROUP/enInputHighPassFltFrequency"
+    // ПОКА НЕ ИСПОЛЬЗУЮТСЯ. Это адреса ЧТЕНИЯ текущей крутизны фильтров
+    // (Integer-тип). Кнопки SLOPE уже есть и переключают крутизну, но
+    // подписки на текущее значение ещё нет - поэтому кнопка не может
+    // показать, какая крутизна выбрана. Оставлены намеренно: понадобятся,
+    // как только добавим подписку. Не удалять как "мёртвый код".
     fun hpFilterSlopeAddress() = "/enPPCIntegerMessage/$GROUP/enInputHighPassFltSlope"
     fun lpFilterInAddress() = "/enPPCSwitchMessage/$GROUP/enInputLowPassFltIn"
     fun lpFilterFreqAddress() = "/enPPCRotaryMessage/$GROUP/enInputLowPassFltFrequency"
@@ -301,32 +374,16 @@ object Pro2Commands {
     fun getGain(channelIndex: Int): ByteArray =
         OscUtil.encode(gainAddress(), listOf(channelIndex))
 
-    fun getGainTrim(channelIndex: Int): ByteArray =
-        OscUtil.encode(gainTrimAddress(), listOf(channelIndex))
 
     fun getName(channelIndex: Int): ByteArray =
         OscUtil.encode(nameAddress(), listOf(channelIndex))
 
-    fun getColour(channelIndex: Int): ByteArray =
-        OscUtil.encode(colourAddress(), listOf(channelIndex))
 
-    fun getCompRatio(channelIndex: Int): ByteArray =
-        OscUtil.encode(compRatioAddress(), listOf(channelIndex))
 
-    fun getCompAttack(channelIndex: Int): ByteArray =
-        OscUtil.encode(compAttackAddress(), listOf(channelIndex))
 
-    fun getCompRelease(channelIndex: Int): ByteArray =
-        OscUtil.encode(compReleaseAddress(), listOf(channelIndex))
 
-    fun getCompThreshold(channelIndex: Int): ByteArray =
-        OscUtil.encode(compThresholdAddress(), listOf(channelIndex))
 
-    fun getCompMakeupGain(channelIndex: Int): ByteArray =
-        OscUtil.encode(compMakeupGainAddress(), listOf(channelIndex))
 
-    fun getCompIn(channelIndex: Int): ByteArray =
-        OscUtil.encode(compInAddress(), listOf(channelIndex))
 
     // === Эквалайзер (4 полосы) - ПОДТВЕРЖДЕНО описаниями в списке команд
     // (каждый параметр имеет чёткое, понятное описание - "Sets bass
@@ -337,16 +394,25 @@ object Pro2Commands {
     private fun eqBandSuffix(band: EqBand) = when (band) {
         EqBand.BASS -> "Bass"
         EqBand.LOW_MID -> "LowMid"
-        EqBand.MID_HIGH -> "MidHigh"
+        // ИСПРАВЛЕНО: было "MidHigh". Реальное имя в прошивке -
+        // "HighMid" (enPEQFrequencyHighMid / enPEQGainHighMid /
+        // enPEQWidthHighMid). С "MidHigh" пульт отвечал на подписку
+        // blob-ом НУЛЕВОЙ длины, то есть "такого параметра нет", и вся
+        // третья полоса эквалайзера молча не работала. В датасете
+        // muffeeee тут опечатка - там указано MidHigh.
+        EqBand.MID_HIGH -> "HighMid"
         EqBand.TREBLE -> "Treble"
     }
 
     fun eqInAddress() = "/enPPCSwitchMessage/$GROUP/enPEQIn"
     fun eqBandActiveAddress(band: EqBand): String {
-        // ВАЖНО: у high-mid параметр называется enPEQHighMid (без "Active" в
-        // конце), у остальных трёх - enPEQ<Band>Active. Несогласованность
+        // ИСПРАВЛЕНО: было enPEQHighMid (без "Active"). Пульт отвечал
+        // пустым blob-ом. В прошивке параметр называется
+        // enPEQHighMidActive - то есть схема как раз согласованная,
+        // enPEQ<Band>Active для всех четырёх полос.
+        // Историческая заметка: несогласованность
         // есть уже в самом списке команд, не опечатка с нашей стороны.
-        val name = if (band == EqBand.MID_HIGH) "enPEQHighMid" else "enPEQ${eqBandSuffix(band)}Active"
+        val name = "enPEQ${eqBandSuffix(band)}Active"
         return "/enPPCSwitchMessage/$GROUP/$name"
     }
     fun eqFreqAddress(band: EqBand) = "/enPPCRotaryMessage/$GROUP/enPEQFrequency${eqBandSuffix(band)}"
@@ -393,20 +459,10 @@ object Pro2Commands {
     fun setEqShapeNext(channelIndex: Int, band: EqBand): ByteArray =
         OscUtil.encode(eqShapeAddress(band), listOf(channelIndex, 1))
 
-    fun getEqIn(channelIndex: Int): ByteArray =
-        OscUtil.encode(eqInAddress(), listOf(channelIndex))
 
-    fun getEqBandActive(channelIndex: Int, band: EqBand): ByteArray =
-        OscUtil.encode(eqBandActiveAddress(band), listOf(channelIndex))
 
-    fun getEqFreq(channelIndex: Int, band: EqBand): ByteArray =
-        OscUtil.encode(eqFreqAddress(band), listOf(channelIndex))
 
-    fun getEqGain(channelIndex: Int, band: EqBand): ByteArray =
-        OscUtil.encode(eqGainAddress(band), listOf(channelIndex))
 
-    fun getEqWidth(channelIndex: Int, band: EqBand): ByteArray =
-        OscUtil.encode(eqWidthAddress(band), listOf(channelIndex))
 
     // === Мастер (НЕ подтверждено реальным захватом - см. заметку выше) ===
     private const val MASTER_GROUP = "enVirtualMasters"
@@ -433,11 +489,7 @@ object Pro2Commands {
     fun setMasterSoloB(masterIndex: Int, soloed: Boolean): ByteArray =
         OscUtil.encode(masterSoloBAddress(), listOf(masterIndex, if (soloed) 1 else 0))
 
-    fun getMasterFader(masterIndex: Int): ByteArray =
-        OscUtil.encode(masterFaderAddress(), listOf(masterIndex))
 
-    fun getMasterMute(masterIndex: Int): ByteArray =
-        OscUtil.encode(masterMuteAddress(), listOf(masterIndex))
 
     // === Aux Returns (8 шт. по мануалу) - НЕ подтверждено реальным захватом.
     // ВАЖНО: тут другие имена параметров, чем у каналов/мастера -
@@ -454,6 +506,9 @@ object Pro2Commands {
     fun auxReturnColourAddress() = "/enPPCIntegerMessage/$AUX_RETURN_GROUP/enChannelColour"
     fun auxReturnMeterAddress() = "/enPPCMeterMessage/$AUX_RETURN_GROUP/enMeter"
 
+    // ПОКА НЕ ИСПОЛЬЗУЮТСЯ: цвет aux-возвратов и матриц приложение только
+    // читает, экрана смены цвета для них нет (в отличие от каналов).
+    // Оставлены как готовая основа, если решим добавить.
     fun setAuxReturnColour(auxIndex: Int, argbColor: Int): ByteArray =
         OscUtil.encode(auxReturnColourAddress(), listOf(auxIndex, argbColor))
 
@@ -469,14 +524,8 @@ object Pro2Commands {
     fun setAuxReturnSoloB(auxIndex: Int, soloed: Boolean): ByteArray =
         OscUtil.encode(auxReturnSoloBAddress(), listOf(auxIndex, if (soloed) 1 else 0))
 
-    fun getAuxReturnFader(auxIndex: Int): ByteArray =
-        OscUtil.encode(auxReturnFaderAddress(), listOf(auxIndex))
 
-    fun getAuxReturnMute(auxIndex: Int): ByteArray =
-        OscUtil.encode(auxReturnMuteAddress(), listOf(auxIndex))
 
-    fun getAuxReturnName(auxIndex: Int): ByteArray =
-        OscUtil.encode(auxReturnNameAddress(), listOf(auxIndex))
 
     // === 16 aux-шин (СОБСТВЕННЫЙ уровень/mute самой шины, НЕ посыл с канала -
     // это уже enSubSendLevel выше). НЕ подтверждено реальным захватом, но
@@ -504,14 +553,8 @@ object Pro2Commands {
     fun setAuxBusSoloB(busIndex: Int, soloed: Boolean): ByteArray =
         OscUtil.encode(auxBusSoloBAddress(), listOf(busIndex, if (soloed) 1 else 0))
 
-    fun getAuxBusFader(busIndex: Int): ByteArray =
-        OscUtil.encode(auxBusFaderAddress(), listOf(busIndex))
 
-    fun getAuxBusMute(busIndex: Int): ByteArray =
-        OscUtil.encode(auxBusMuteAddress(), listOf(busIndex))
 
-    fun getAuxBusName(busIndex: Int): ByteArray =
-        OscUtil.encode(auxBusNameAddress(), listOf(busIndex))
 
     // === VCA-группы (8 шт.) - ПОЛНОСТЬЮ ПОДТВЕРЖДЕНО реальным трафиком iPad
     // (Mixtender). ВАЖНО: старый список команд (muffeeee JSON) указывал
@@ -562,14 +605,8 @@ object Pro2Commands {
     fun setVcaSolo(vcaIndex: Int, soloed: Boolean): ByteArray =
         OscUtil.encode(vcaSoloAddress(), listOf(vcaIndex, if (soloed) 1 else 0))
 
-    fun getVcaFader(vcaIndex: Int): ByteArray =
-        OscUtil.encode(vcaFaderAddress(), listOf(vcaIndex))
 
-    fun getVcaMute(vcaIndex: Int): ByteArray =
-        OscUtil.encode(vcaMuteAddress(), listOf(vcaIndex))
 
-    fun getVcaName(vcaIndex: Int): ByteArray =
-        OscUtil.encode(vcaNameAddress(), listOf(vcaIndex))
 
     // === Main Outs (в самом пульте это "matrix out", 8 позиций) - базовая
     // полоса (фейдер/mute/solo/имя/цвет/метр). enFaderLevel подтверждён
@@ -651,14 +688,10 @@ object Pro2Commands {
         OscUtil.encode(mainOutCompMakeupAddress(), listOf(index, level.coerceIn(0f, 1f)))
     fun setMainOutCompSoftClip(index: Int, level: Float): ByteArray =
         OscUtil.encode(mainOutCompSoftClipAddress(), listOf(index, level.coerceIn(0f, 1f)))
+    // ПОКА НЕ ИСПОЛЬЗУЕТСЯ: задержка матричного выхода не выведена в UI.
     fun setMainOutDelay(index: Int, level: Float): ByteArray =
         OscUtil.encode(mainOutDelayAddress(), listOf(index, level.coerceIn(0f, 1f)))
 
-    fun getMainOutEqFreq(index: Int, band: Int): ByteArray = OscUtil.encode(mainOutEqFreqAddress(band), listOf(index))
-    fun getMainOutEqGain(index: Int, band: Int): ByteArray = OscUtil.encode(mainOutEqGainAddress(band), listOf(index))
-    fun getMainOutEqWidth(index: Int, band: Int): ByteArray = OscUtil.encode(mainOutEqWidthAddress(band), listOf(index))
-    fun getMainOutCompRatio(index: Int): ByteArray = OscUtil.encode(mainOutCompRatioAddress(), listOf(index))
-    fun getMainOutCompThreshold(index: Int): ByteArray = OscUtil.encode(mainOutCompThresholdAddress(), listOf(index))
 
     // === Main Out - LINK (стерео-пара), Presence, Bus Trim, циклические
     // режимы компрессора. ПОДТВЕРЖДЕНО реальным захватом трафика iPad
@@ -670,9 +703,6 @@ object Pro2Commands {
     fun mainOutPairingAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enConfigPairingState"
     fun setMainOutPairingNext(index: Int): ByteArray = OscUtil.encode(mainOutPairingAddress(), listOf(index, 1))
 
-    fun mainOutCompPresenceAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enCompLimPresence"
-    fun setMainOutCompPresence(index: Int, level: Float): ByteArray =
-        OscUtil.encode(mainOutCompPresenceAddress(), listOf(index, level.coerceIn(0f, 1f)))
 
     fun mainOutBusTrimAddress() = "/enPPCRotaryMessage/$MAIN_OUT_GROUP/enBusTrimLevel"
     fun setMainOutBusTrim(index: Int, level: Float): ByteArray =
@@ -687,14 +717,7 @@ object Pro2Commands {
     fun mainOutCompStyleCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompStyle"
     fun setMainOutCompStyleNext(index: Int): ByteArray = OscUtil.encode(mainOutCompStyleCycleAddress(), listOf(index, 1))
 
-    fun mainOutCompFilterBandwidthAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidthCycle"
-    fun mainOutCompFilterBandwidthCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidthCycle"
-    fun setMainOutCompFilterBandwidthNext(index: Int): ByteArray =
-        OscUtil.encode(mainOutCompFilterBandwidthCycleAddress(), listOf(index, 1))
 
-    fun mainOutCompKneeAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimKneeCycle"
-    fun mainOutCompKneeCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimKneeCycle"
-    fun setMainOutCompKneeNext(index: Int): ByteArray = OscUtil.encode(mainOutCompKneeCycleAddress(), listOf(index, 1))
 
     // === Aux-шина - LINK (стерео-пара). ПОДТВЕРЖДЕНО реальным захватом
     // (тот же тип enPPCSwitchMessage, что и у Main Out выше). ===
@@ -702,12 +725,15 @@ object Pro2Commands {
     fun setAuxBusPairingNext(index: Int): ByteArray = OscUtil.encode(auxBusPairingAddress(), listOf(index, 1))
 
     // === Aux-шины - EQ (6 полос) и компрессор. Та же структура, что у Main
-    // Outs, но с ДРУГИМИ именами параметров - сверено с датасетом отдельно,
-    // не предполагалось по аналогии. Главное отличие: gain для EQ называется
-    // enPEQQGainBand (двойное Q - так в самой прошивке, не опечатка).
+    // Outs. ИСПРАВЛЕНО: gain для EQ был enPEQQGainBand (с двойным Q) -
+    // считалось, что так в прошивке. Проверка показала обратное: строка "enPEQQGain"
+    // встречается в прошивке и Offline Editor РОВНО НОЛЬ раз, а пульт
+    // отвечал на подписку blob-ом нулевой длины ("параметра нет") на всех
+    // шести полосах. Двойное Q - опечатка в датасете muffeeee. Реальное
+    // имя такое же, как у Masters и MainOuts: enPEQGainBand1-6.
     // НЕ подтверждено реальным захватом. ===
     fun auxBusEqFreqAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQFrequencyBand${band + 1}"
-    fun auxBusEqGainAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQQGainBand${band + 1}"
+    fun auxBusEqGainAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQGainBand${band + 1}"
     fun auxBusEqWidthAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQWidthBand${band + 1}"
     fun auxBusHpFreqAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enGEQHPFrequency"
     fun auxBusLpFreqAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enGEQLPFrequency"
@@ -756,6 +782,27 @@ object Pro2Commands {
     // шин свой отдельный параметр (индекс шины зашит в имя, а не передаётся
     // как аргумент - как и предполагает список команд).
     fun subSendLevelAddress(auxBus: Int) = "/enPPCRotaryMessage/$GROUP/enSubSendLevel$auxBus"
+
+    // === ПОСЫЛЫ В МАТРИЦУ (8 матричных шин) ===
+    // Мануал (стр. 12): канал маршрутизируется "via level controls to 24
+    // mix buses" - это 16 аукс-шин (enSubSendLevel, уже реализовано) плюс
+    // 8 матричных (enMainSendLevel, здесь). Несмотря на слово "Main" в
+    // имени, это именно матричные посылы, а не мастер-шина.
+    //
+    // ⚠ Панорама посыла (enMainSendPan) идёт ПАРАМИ - всего 4 параметра
+    // на 8 шин, по одному на стереопару. Пока не реализована.
+    fun mainSendLevelAddress(matrix: Int) = "/enPPCRotaryMessage/$GROUP/enMainSendLevel$matrix"
+    fun mainSendEnableAddress(matrix: Int) = "/enPPCSwitchMessage/$GROUP/enMainSendEnableIn$matrix"
+    fun mainSendPreFadeAddress(matrix: Int) = "/enPPCSwitchMessage/$GROUP/enMainSendPreFadeIn$matrix"
+
+    fun setMainSend(channelIndex: Int, matrix: Int, level: Float): ByteArray =
+        OscUtil.encode(mainSendLevelAddress(matrix), listOf(channelIndex, level.coerceIn(0f, 1f)))
+
+    fun setMainSendEnable(channelIndex: Int, matrix: Int, on: Boolean): ByteArray =
+        OscUtil.encode(mainSendEnableAddress(matrix), listOf(channelIndex, if (on) 1 else 0))
+
+    fun setMainSendPreFade(channelIndex: Int, matrix: Int, pre: Boolean): ByteArray =
+        OscUtil.encode(mainSendPreFadeAddress(matrix), listOf(channelIndex, if (pre) 1 else 0))
     // Отдельно от уровня посыла - ПОДТВЕРЖДЕНО реальным захватом. Включение
     // самого посыла (независимо от того, что стоит на ползунке уровня) и
     // pre/post-фейдер режим.
@@ -765,8 +812,6 @@ object Pro2Commands {
     fun setSubSendLevel(channelIndex: Int, auxBus: Int, level: Float): ByteArray =
         OscUtil.encode(subSendLevelAddress(auxBus), listOf(channelIndex, level.coerceIn(0f, 1f)))
 
-    fun getSubSendLevel(channelIndex: Int, auxBus: Int): ByteArray =
-        OscUtil.encode(subSendLevelAddress(auxBus), listOf(channelIndex))
 
     fun setSubSendEnable(channelIndex: Int, auxBus: Int, on: Boolean): ByteArray =
         OscUtil.encode(subSendEnableAddress(auxBus), listOf(channelIndex, if (on) 1 else 0))
@@ -804,4 +849,41 @@ object Pro2Commands {
     // при каждом тапе. Глобальный параметр - индекса канала/группы нет. ===
     fun globalTapAddress() = "/enPPCSwitchMessage/enGlobals/enGlobalTapSwitch"
     fun setGlobalTap(): ByteArray = OscUtil.encode(globalTapAddress(), listOf(1))
+
+    // === Мьют-группы - структура полностью симметрична VCA-группам выше
+    // (см. подробную заметку у vcaChild*Address()), из того же датасета
+    // muffeeee, НЕ подтверждено собственным захватом. Число групп (8) -
+    // предположение по аналогии с 8 VCA-группами, см. заметку у
+    // ConnectionHolder.MUTE_GROUP_COUNT.
+    //
+    // ВАЖНО про enMuteGroupMute: датасет описывает его прямым текстом как
+    // "This toggles the mute groups to be muted or unmuted" - однозначно
+    // toggle-параметр (в отличие от спорного случая с mute одиночного
+    // канала, см. пункт 1 hardware_check_list.md). Шлём константу 1.
+    private const val MUTE_GROUP_GROUP = "enVirtualMuteGroups"
+    fun muteGroupMuteAddress() = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupMute"
+    fun muteGroupNameAddress() = "/enPPCStringMessage/$MUTE_GROUP_GROUP/enPathname"
+    fun muteGroupChildInputAddress(inputIndex: Int) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildInput${inputIndex + 1}"
+    fun muteGroupChildSubMixAddress(busIndex: Int) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildSubMix${busIndex + 1}"
+    fun muteGroupChildAuxReturnAddress(auxIndex: Int) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildAuxReturn${auxIndex + 1}"
+    fun muteGroupChildMainAddress(mainIndex: Int) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildMain${mainIndex + 1}"
+    fun muteGroupChildMasterAddress(letter: String) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildMaster$letter"
+
+    fun setMuteGroupMute(groupIndex: Int): ByteArray =
+        OscUtil.encode(muteGroupMuteAddress(), listOf(groupIndex, 1))
+
+    fun setMuteGroupChildInput(inputIndex: Int, groupIndex: Int, member: Boolean): ByteArray =
+        OscUtil.encode(muteGroupChildInputAddress(inputIndex), listOf(groupIndex, if (member) 1 else 0))
+
+    fun setMuteGroupChildSubMix(busIndex: Int, groupIndex: Int, member: Boolean): ByteArray =
+        OscUtil.encode(muteGroupChildSubMixAddress(busIndex), listOf(groupIndex, if (member) 1 else 0))
+
+    fun setMuteGroupChildAuxReturn(auxIndex: Int, groupIndex: Int, member: Boolean): ByteArray =
+        OscUtil.encode(muteGroupChildAuxReturnAddress(auxIndex), listOf(groupIndex, if (member) 1 else 0))
+
+    fun setMuteGroupChildMain(mainIndex: Int, groupIndex: Int, member: Boolean): ByteArray =
+        OscUtil.encode(muteGroupChildMainAddress(mainIndex), listOf(groupIndex, if (member) 1 else 0))
+
+    fun setMuteGroupChildMaster(letter: String, groupIndex: Int, member: Boolean): ByteArray =
+        OscUtil.encode(muteGroupChildMasterAddress(letter), listOf(groupIndex, if (member) 1 else 0))
 }

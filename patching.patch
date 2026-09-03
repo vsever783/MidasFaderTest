@@ -1,0 +1,337 @@
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/ConnectionHolder.kt	2026-08-19 22:25:45.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/ConnectionHolder.kt	2026-08-29 16:45:31.203225368 +0000
+@@ -79,6 +79,45 @@
+     // Членство "детей" в VCA-группах - активна, только пока открыт
+     // соответствующий экран (см. openVcaMembers/subscribeVcaMembers).
+     val vcaMemberSubscriptions = mutableMapOf<String, VcaMemberSub>()
++    // Исходный (до нашего вмешательства) источник патчинга по каналам -
++    // чтобы всегда можно было вернуть ровно то, что было. Заполняется
++    // ОДИН раз на канал, первым же значением, пришедшим с пульта.
++    val patchBaseline = mutableMapOf<Int, Int>()
++
++    /**
++     * Единая точка очистки ВСЕГО состояния подписок.
++     *
++     * ИСПРАВЛЕНИЕ БАГА: раньше очистка была размазана по трём местам
++     * (reset() здесь, блок переподключения в MainActivityNetwork,
++     * onDestroy в MainActivity), и каждое место чистило СВОЙ набор карт.
++     * В итоге mainOutExtrasSubscribed и auxBusExtrasSubscribed не
++     * очищались НИГДЕ, а vcaMemberSubscriptions - не очищалась при
++     * переподключении. Последствие: после переподключения или смены
++     * режима эти "сторожевые" множества оставались заполненными,
++     * subscribeMainOutExtras/subscribeAuxBusExtras сразу выходили по
++     * `if (...Subscribed.contains(index)) return`, и детальные экраны
++     * MATRIX и AUX больше никогда не переподписывались - показывали
++     * старые значения и не обновлялись до перезапуска приложения.
++     *
++     * Теперь любое место, где сессия начинается заново, вызывает этот
++     * метод - добавить новую карту и забыть её очистить больше нельзя.
++     */
++    fun clearAllSubscriptionState() {
++        subscriptions.clear()
++        masterSubscriptions.clear()
++        auxSubscriptions.clear()
++        auxBusSubscriptions.clear()
++        vcaSubscriptions.clear()
++        mainOutSubscriptions.clear()
++        vcaMemberSubscriptions.clear()
++        auxSendsSubscribed.clear()
++        eqSubscribed.clear()
++        gateSubscribed.clear()
++        inputExtrasSubscribed.clear()
++        compGateExtrasSubscribed.clear()
++        mainOutExtrasSubscribed.clear()
++        auxBusExtrasSubscribed.clear()
++    }
+ 
+     fun reset() {
+         socket = null
+@@ -87,6 +126,7 @@
+         consoleAddress = null
+         sessionToken = null
+         subscribedAlready = false
+-        subscriptions.clear()
++        clearAllSubscriptionState()
++        patchBaseline.clear()
+     }
+ }
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/MainActivity.kt	2026-08-24 12:12:15.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/MainActivity.kt	2026-08-29 16:45:55.102835453 +0000
+@@ -1398,8 +1398,11 @@
+                 if (blob.size >= 4) {
+                     val raw = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+                     ConnectionHolder.channelData[sub.channel].channelSource = raw
++                    if (ConnectionHolder.patchBaseline[sub.channel] == null) {
++                        ConnectionHolder.patchBaseline[sub.channel] = raw
++                    }
+                     if (openDetailChannel == sub.channel) {
+-                        detailChannelSourceText?.text = "SOURCE: $raw"
++                        detailChannelSourceText?.text = sourceLabel(raw)
+                     }
+                 }
+             }
+@@ -1987,6 +1990,84 @@
+     private var detailPhaseButton: Button? = null
+     private var detailLinkButton: Button? = null
+     private var detailChannelSourceText: TextView? = null
++
++    // ===== ПАТЧИНГ ВХОДА (тестовая реализация) =====================
++    //
++    // Кодировка uSource подтверждена уровнем A (12 точек живого трафика по
++    // DL251 + 3 по локальным входам). Сторона ЗАПИСИ в захватах не
++    // наблюдалась ни разу, но enChannelColour - параметр того же типа
++    // (enPPCIntegerMessage) в той же группе, и его запись тегами ",ii"
++    // давно работает на реальном пульте. Поэтому пишем так же и начинаем
++    // с безопасного no-op.
++
++    /** Подпись источника: расшифровка, если форма известна, иначе сырое число. */
++    private fun sourceLabel(raw: Int): String {
++        if (raw == -1) return "SOURCE: —"
++        val human = Pro2Commands.describeSource(raw)
++        return if (human != null) "SOURCE: $human" else "SOURCE: 0x%08x (не распознан)".format(raw)
++    }
++
++    private fun showPatchDialog(channel: Int) {
++        val current = ConnectionHolder.channelData[channel].channelSource
++        val baseline = ConnectionHolder.patchBaseline[channel]
++
++        // Порядок пунктов повторяет план безопасной проверки: сначала
++        // no-op (проверяет сам факт, что формат записи принят, ничего не
++        // меняя), потом реальные переключения, и всегда доступен возврат.
++        val labels = mutableListOf<String>()
++        val actions = mutableListOf<() -> Unit>()
++
++        if (current != -1) {
++            labels.add("1. NO-OP — записать то же значение (${Pro2Commands.describeSource(current) ?: "0x%08x".format(current)})")
++            actions.add { confirmAndSend(channel, current, "NO-OP (без изменений)") }
++        }
++        for (ch in 1..48) {
++            labels.add("DL251 ch $ch")
++            actions.add { confirmAndSend(channel, Pro2Commands.dl251Source(ch), "DL251 ch $ch") }
++        }
++        for (inp in 1..8) {
++            labels.add("Локальный вход $inp")
++            actions.add { confirmAndSend(channel, Pro2Commands.localInputSource(inp), "Локальный вход $inp") }
++        }
++        labels.add("Распатчить (Silence)")
++        actions.add { confirmAndSend(channel, Pro2Commands.SOURCE_SILENCE, "не назначен") }
++        if (baseline != null) {
++            labels.add("↩ Вернуть исходный (${Pro2Commands.describeSource(baseline) ?: "0x%08x".format(baseline)})")
++            actions.add { confirmAndSend(channel, baseline, "исходный источник") }
++        }
++
++        android.app.AlertDialog.Builder(this)
++            .setTitle("Патчинг канала ${channel + 1}")
++            .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
++            .setNegativeButton("Отмена", null)
++            .show()
++    }
++
++    /**
++     * Второе подтверждение перед реальной записью. Патчинг меняет
++     * маршрутизацию звука, поэтому случайный тап по списку не должен
++     * ничего переключать.
++     */
++    private fun confirmAndSend(channel: Int, uSource: Int, human: String) {
++        android.app.AlertDialog.Builder(this)
++            .setTitle("Подтвердите")
++            .setMessage(
++                "Канал ${channel + 1} → $human\n\n" +
++                    "Значение: 0x%08x (dec %d)\n\n".format(uSource, uSource) +
++                    "Это изменит реальную маршрутизацию звука на пульте."
++            )
++            .setPositiveButton("Записать") { _, _ ->
++                sendRawAsync(Pro2Commands.setChannelSource(channel, uSource))
++                android.widget.Toast.makeText(
++                    this,
++                    "Отправлено: 0x%08x → канал ${channel + 1}".format(uSource),
++                    android.widget.Toast.LENGTH_SHORT
++                ).show()
++            }
++            .setNegativeButton("Отмена", null)
++            .show()
++    }
++
+     private var detailHpFilterInButton: Button? = null
+     private var detailLpFilterInButton: Button? = null
+     private var detailHpFreqSeek: SeekBar? = null
+@@ -3266,12 +3347,23 @@
+         }
+         detailLinkButton = btnLink
+ 
+-        // Патчинг - только чтение, см. заметку в XML/Pro2Commands.kt.
++        // Патчинг - чтение + ТЕСТОВАЯ запись, см. заметку в Pro2Commands.kt.
+         val textSource = view.findViewById<TextView>(R.id.textDetailChannelSource)
+         val currentSource = ConnectionHolder.channelData[channel].channelSource
+-        textSource.text = if (currentSource >= 0) "SOURCE: $currentSource" else "SOURCE: —"
++        textSource.text = sourceLabel(currentSource)
+         detailChannelSourceText = textSource
+ 
++        // Запоминаем исходный источник ОДИН раз на канал - чтобы после
++        // тестов можно было вернуть ровно то, что было до нашего
++        // вмешательства, а не "то, что кажется правильным".
++        if (currentSource != -1 && ConnectionHolder.patchBaseline[channel] == null) {
++            ConnectionHolder.patchBaseline[channel] = currentSource
++        }
++
++        view.findViewById<Button>(R.id.btnDetailPatch).setOnClickListener {
++            showPatchDialog(channel)
++        }
++
+         val seekPan = view.findViewById<SeekBar>(R.id.seekDetailPan)
+         val textPan = view.findViewById<TextView>(R.id.textDetailPanValue)
+         detailPanSeek = seekPan
+@@ -4661,18 +4753,12 @@
+             }
+             receiveJob?.cancel()
+             pollJob?.cancel()
+-            subscriptions.clear()
+-            masterSubscriptions.clear()
+-            auxSubscriptions.clear()
+-            auxBusSubscriptions.clear()
+-            vcaSubscriptions.clear()
+-            mainOutSubscriptions.clear()
+-            ConnectionHolder.vcaMemberSubscriptions.clear()
+-            auxSendsSubscribed.clear()
+-            eqSubscribed.clear()
+-            gateSubscribed.clear()
+-            inputExtrasSubscribed.clear()
+-            compGateExtrasSubscribed.clear()
++            // ИСПРАВЛЕНИЕ: раньше карты перечислялись здесь вручную и две
++            // из них (mainOutExtrasSubscribed, auxBusExtrasSubscribed) не
++            // очищались - после смены режима детальные экраны MATRIX и AUX
++            // считали себя уже подписанными и молча переставали
++            // обновляться. Теперь одна общая функция.
++            ConnectionHolder.clearAllSubscriptionState()
+             // Сбрасываем ТОЛЬКО признак подписки - следующий режим (при
+             // входе в MainActivity заново) должен подписаться с нуля под
+             // себя, а не решить, что он "восстанавливается после поворота".
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/Pro2Commands.kt	2026-08-23 19:37:04.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/Pro2Commands.kt	2026-08-29 16:44:49.731280397 +0000
+@@ -72,16 +72,61 @@
+     // ("unknown") - нужна проверка на реальном пульте.
+     fun linkAddress() = "/enPPCSwitchMessage/$GROUP/enChannelLinked"
+ 
+-    // === Патчинг (какой физический вход подключён к каналу) - ТОЛЬКО
+-    // ЧТЕНИЕ, специально без set-функции. Подтверждено найденным в архиве
+-    // Pro2 Offline Editor, что значение - составная упакованная структура
+-    // (тип устройства + DeviceID + номер карты через битовые поля), а не
+-    // простой номер входа - без расшифрованной формулы отправка
+-    // произвольного числа рискует переключить канал на неожиданный
+-    // физический вход прямо во время живого выступления. Сначала собираем
+-    // данные (какое число соответствует какому реальному входу), потом
+-    // добавим запись.
++    // === ПАТЧИНГ ВХОДА (enChannelSource) - кодировка РАСШИФРОВАНА, уровень A.
++    //
++    // Значение - 32-битное беззнаковое:
++    //     uSource = Type            (биты 0-7,  младший байт)
++    //             | path    << 8    (биты 8-19, 12 бит)
++    //             | Channel << 20   (биты 20-27, 8 бит)
++    // Отдельный флаг 0x80000000 = Silence Bit (источник не назначен).
++    //
++    // Подтверждено четырьмя независимыми путями: разбор Mac Offline Editor,
++    // SceneData::ConvertDSPSource, CSystemInputSource::Assign в реальной
++    // прошивке, и живой сетевой трафик с Pro2 (12 точек по DL251, обе
++    // границы; 3 точки по локальным входам).
++    //
++    // ВАЖНО про запись: формат записи отдельно не наблюдался в захватах,
++    // НО enChannelColour - параметр того же типа (enPPCIntegerMessage), в
++    // той же группе, и его запись тегами ",ii" (индекс канала + int32
++    // значение) давно работает на реальном пульте. Поэтому пишем так же.
+     fun channelSourceAddress() = "/enPPCIntegerMessage/$GROUP/enChannelSource"
++
++    /** Источник не назначен (распатчено). */
++    const val SOURCE_SILENCE: Int = -2147483648 // 0x80000000
++
++    /** DL251 (Type 42), сквозной физический канал 1..48, path всегда 0. */
++    fun dl251Source(physicalChannel: Int): Int =
++        42 or ((physicalChannel - 1) shl 20)
++
++    /** Локальный вход поверхности (Type 14 LineIOCPU, path 17), вход 1..8. */
++    fun localInputSource(physicalInput: Int): Int =
++        0x110e or ((physicalInput - 1) shl 20)
++
++    /**
++     * Человекочитаемая расшифровка uSource. Возвращает null, если значение
++     * не соответствует ни одной ПОДТВЕРЖДЁННОЙ трафиком форме - в этом
++     * случае наверху показываем сырое число, а не выдумываем подпись.
++     */
++    fun describeSource(uSource: Int): String? {
++        if (uSource == SOURCE_SILENCE) return "не назначен"
++        if (uSource < 0) return null
++        val type = uSource and 0xFF
++        val path = (uSource shr 8) and 0xFFF
++        val channel = (uSource shr 20) and 0xFF
++        return when {
++            type == 42 && path == 0 && channel <= 47 -> "DL251 ch ${channel + 1}"
++            type == 14 && path == 17 && channel <= 7 -> "Локальный вход ${channel + 1}"
++            else -> null
++        }
++    }
++
++    /**
++     * ЗАПИСЬ патчинга. Вызывать только осознанно - меняет реальную
++     * маршрутизацию звука на пульте.
++     */
++    fun setChannelSource(channelIndex: Int, uSource: Int): ByteArray =
++        OscUtil.encode(channelSourceAddress(), listOf(channelIndex, uSource))
++
+     // ПОДТВЕРЖДЕНО реальным трафиком Mixtender 2 (перехват "TRIM" ручки на канале 32):
+     // адрес enInputGain НЕ используется приложением для этой ручки вообще -
+     // реально используется enMicSplitStepGain. Обозначение в JSON-файле muffeeee
+@@ -687,13 +732,13 @@
+     fun mainOutCompStyleCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompStyle"
+     fun setMainOutCompStyleNext(index: Int): ByteArray = OscUtil.encode(mainOutCompStyleCycleAddress(), listOf(index, 1))
+ 
+-    fun mainOutCompFilterBandwidthAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidthCycle"
+-    fun mainOutCompFilterBandwidthCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidthCycle"
++    fun mainOutCompFilterBandwidthAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidth"
++    fun mainOutCompFilterBandwidthCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidth"
+     fun setMainOutCompFilterBandwidthNext(index: Int): ByteArray =
+         OscUtil.encode(mainOutCompFilterBandwidthCycleAddress(), listOf(index, 1))
+ 
+-    fun mainOutCompKneeAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimKneeCycle"
+-    fun mainOutCompKneeCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimKneeCycle"
++    fun mainOutCompKneeAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimKnee"
++    fun mainOutCompKneeCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimKnee"
+     fun setMainOutCompKneeNext(index: Int): ByteArray = OscUtil.encode(mainOutCompKneeCycleAddress(), listOf(index, 1))
+ 
+     // === Aux-шина - LINK (стерео-пара). ПОДТВЕРЖДЕНО реальным захватом
+--- extracted/MidasFaderTest/app/src/main/res/layout/channel_detail.xml	2026-08-23 19:36:51.000000000 +0000
++++ work/app/src/main/res/layout/channel_detail.xml	2026-08-29 16:45:00.751147019 +0000
+@@ -306,11 +306,12 @@
+                     android:textColor="#ffffff"
+                     android:backgroundTint="#3a3a3c" />
+ 
+-                <!-- Патчинг (какой физический вход подключён) - ТОЛЬКО
+-                     ЧТЕНИЕ, сырое число. Кодировка не расшифрована - см.
+-                     заметку у Pro2Commands.channelSourceAddress(). Пока
+-                     полезно только чтобы собрать данные: смотреть, как
+-                     меняется число при ручном патчинге на самом пульте. -->
++                <!-- Патчинг (какой физический вход подключён к каналу).
++                     Кодировка расшифрована (уровень A) - см. подробный
++                     комментарий у Pro2Commands.channelSourceAddress().
++                     ЗАПИСЬ включена, но намеренно спрятана за диалогом с
++                     подтверждением: смена патча меняет реальную
++                     маршрутизацию звука на пульте. -->
+                 <TextView
+                     android:id="@+id/textDetailChannelSource"
+                     android:layout_width="match_parent"
+@@ -322,6 +323,17 @@
+                     android:gravity="center"
+                     android:layout_marginTop="8dp" />
+ 
++                <Button
++                    android:id="@+id/btnDetailPatch"
++                    android:layout_width="match_parent"
++                    android:layout_height="wrap_content"
++                    android:layout_marginTop="6dp"
++                    android:text="ПАТЧИНГ (ТЕСТ)"
++                    android:textSize="12sp"
++                    android:textStyle="bold"
++                    android:textColor="#ffffff"
++                    android:backgroundTint="#3a3a3c" />
++
+                 <!-- Панорама - ПОДТВЕРЖДЕНО реальным захватом. -->
+                 <TextView
+                     android:layout_width="wrap_content"

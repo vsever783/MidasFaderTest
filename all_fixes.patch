@@ -1,0 +1,1259 @@
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/ConnectionHolder.kt	2026-08-19 22:25:45.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/ConnectionHolder.kt	2026-08-31 11:01:47.738452602 +0000
+@@ -23,6 +23,39 @@
+     var consolePort: Int = 10000
+     var sessionToken: Int? = null
+     var subscribedAlready: Boolean = false
++
++    /**
++     * Атомарный "замок" на первичную подписку.
++     *
++     * ИСПРАВЛЕНИЕ ГОНКИ: subscribeAll() вызывался из трёх мест, и два из
++     * них выполняются в РАЗНЫХ потоках:
++     *   1) сразу после подключения (корутина на Dispatchers.IO),
++     *   2) при получении первого пакета с токеном (поток приёма),
++     *   3) при входе в режим после смены роли.
++     * Место 2 проверяло `if (!subscribedAlready)`, но проверка и
++     * присваивание не были атомарными: если пульт присылал токен раньше,
++     * чем место 1 успевало выставить флаг, subscribeAll() выполнялся
++     * ДВАЖДЫ. В захвате это видно как ~1000 двойных подписок с разбросом
++     * 60-135 мс - все базовые подписки 56 каналов, 16 aux-шин и 8
++     * aux-возвратов уходили на пульт по два раза.
++     *
++     * compareAndSet гарантирует, что subscribeAll() выполнит ровно один
++     * вызывающий, кто бы ни пришёл первым.
++     */
++    private val subscribeGate = java.util.concurrent.atomic.AtomicBoolean(false)
++
++    /** true - вызывающий "выиграл" право выполнить subscribeAll(). */
++    fun claimSubscribeAll(): Boolean {
++        val first = subscribeGate.compareAndSet(false, true)
++        if (first) subscribedAlready = true
++        return first
++    }
++
++    /** Снять замок - только там, где сессия начинается заново. */
++    fun releaseSubscribeGate() {
++        subscribeGate.set(false)
++        subscribedAlready = false
++    }
+     // Текущий выбранный банк каналов и режим (КАНАЛЫ/AUX/MASTER) - хранится
+     // здесь, а не в Activity, чтобы поворот экрана не сбрасывал выбор
+     // обратно на банк 1-8 / режим "каналы".
+@@ -67,11 +100,22 @@
+     val auxReturnData = Array(8) { AuxReturnData() }
+     val auxBusData = Array(16) { AuxBusData() }
+     val vcaData = Array(8) { VcaData() }
++    // ПРЕДПОЛОЖЕНИЕ (не подтверждено): 8 мьют-групп, по аналогии с 8
++    // VCA-группами - это распространённое соглашение в линейке Midas Pro,
++    // но само число НЕ встретилось нигде в датасете и не подтверждено на
++    // этом пульте. Если физических кнопок MUTE GROUP на поверхности
++    // больше или меньше 8 - поменять только эту константу.
++    const val MUTE_GROUP_COUNT = 8
++    val muteGroupData = Array(MUTE_GROUP_COUNT) { MuteGroupData() }
++    val muteGroupMemberSubscriptions = mutableMapOf<String, MuteGroupMemberSub>()
+     val mainOutData = Array(8) { MainOutData() }
+     // Отдельная карта для 16 aux-шин.
+     val auxBusSubscriptions = mutableMapOf<String, Subscription>()
+     // Отдельная карта для VCA-групп (8 шт., подтверждено реальным захватом).
+     val vcaSubscriptions = mutableMapOf<String, Subscription>()
++    // Базовое состояние самих мьют-групп (mute-кнопка + имя) - ОТДЕЛЬНО от
++    // muteGroupMemberSubscriptions выше (та карта - только про членство).
++    val muteGroupSubscriptions = mutableMapOf<String, Subscription>()
+     val mainOutSubscriptions = mutableMapOf<String, Subscription>()
+     // Отдельная карта для aux returns - индексы 0..7 пересекаются и с
+     // обычными каналами, и с VCA в будущем.
+@@ -79,6 +123,55 @@
+     // Членство "детей" в VCA-группах - активна, только пока открыт
+     // соответствующий экран (см. openVcaMembers/subscribeVcaMembers).
+     val vcaMemberSubscriptions = mutableMapOf<String, VcaMemberSub>()
++    // Исходный (до нашего вмешательства) источник патчинга по каналам -
++    // чтобы всегда можно было вернуть ровно то, что было. Заполняется
++    // ОДИН раз на канал, первым же значением, пришедшим с пульта.
++    val patchBaseline = mutableMapOf<Int, Int>()
++
++    /**
++     * Хэндлы, на которые пульт ответил blob-ом нулевой длины ("такого
++     * параметра тут нет"). Нужен только чтобы не засорять лог повтором -
++     * пульт шлёт такие ответы по 30 раз в секунду.
++     */
++    val unsupportedHandles = mutableSetOf<String>()
++
++    /**
++     * Единая точка очистки ВСЕГО состояния подписок.
++     *
++     * ИСПРАВЛЕНИЕ БАГА: раньше очистка была размазана по трём местам
++     * (reset() здесь, блок переподключения в MainActivityNetwork,
++     * onDestroy в MainActivity), и каждое место чистило СВОЙ набор карт.
++     * В итоге mainOutExtrasSubscribed и auxBusExtrasSubscribed не
++     * очищались НИГДЕ, а vcaMemberSubscriptions - не очищалась при
++     * переподключении. Последствие: после переподключения или смены
++     * режима эти "сторожевые" множества оставались заполненными,
++     * subscribeMainOutExtras/subscribeAuxBusExtras сразу выходили по
++     * `if (...Subscribed.contains(index)) return`, и детальные экраны
++     * MATRIX и AUX больше никогда не переподписывались - показывали
++     * старые значения и не обновлялись до перезапуска приложения.
++     *
++     * Теперь любое место, где сессия начинается заново, вызывает этот
++     * метод - добавить новую карту и забыть её очистить больше нельзя.
++     */
++    fun clearAllSubscriptionState() {
++        subscriptions.clear()
++        masterSubscriptions.clear()
++        auxSubscriptions.clear()
++        auxBusSubscriptions.clear()
++        vcaSubscriptions.clear()
++        muteGroupSubscriptions.clear()
++        mainOutSubscriptions.clear()
++        vcaMemberSubscriptions.clear()
++        auxSendsSubscribed.clear()
++        eqSubscribed.clear()
++        gateSubscribed.clear()
++        inputExtrasSubscribed.clear()
++        compGateExtrasSubscribed.clear()
++        mainOutExtrasSubscribed.clear()
++        auxBusExtrasSubscribed.clear()
++        unsupportedHandles.clear()
++        muteGroupMemberSubscriptions.clear()
++    }
+ 
+     fun reset() {
+         socket = null
+@@ -86,7 +179,9 @@
+         pollJob = null
+         consoleAddress = null
+         sessionToken = null
+-        subscribedAlready = false
+-        subscriptions.clear()
++        releaseSubscribeGate()
++        clearAllSubscriptionState()
++        patchBaseline.clear()
++        unsupportedHandles.clear()
+     }
+ }
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/MainActivity.kt	2026-08-24 12:12:15.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/MainActivity.kt	2026-08-31 11:02:56.127765960 +0000
+@@ -186,9 +186,13 @@
+             } else {
+                 requestInitialState(existingSocket, existingAddress, port)
+             }
+-            subscribedAlready = true
+             if (sessionToken == null) sessionToken = 0
+-            if (appMode != MODE_MONITOR) {
++            // Замок: subscribeAll() выполнит только первый вызывающий.
++            // Замок берём в ОБОИХ режимах - subscribedAlready используется
++            // ещё и для распознавания поворота экрана, и раньше он
++            // выставлялся здесь безусловно.
++            val firstClaim = ConnectionHolder.claimSubscribeAll()
++            if (firstClaim && appMode != MODE_MONITOR) {
+                 subscribeAll()
+             }
+             startPollLoop(existingSocket, existingAddress, port)
+@@ -209,6 +213,7 @@
+         buildAuxStrips()
+         buildAuxBusStrips()
+         buildVcaStrips()
++        buildMuteGroupStrips()
+         buildMainOutStrips()
+         buildModeButtons()
+         setupGlobalTapButton()
+@@ -261,6 +266,8 @@
+     // обновления кнопок push-ответами) и сами кнопки по ключу "тип:индекс".
+     private var openVcaMembersIndex: Int? = null
+     private val vcaMemberButtons = mutableMapOf<String, Button>()
++    private var openMuteGroupMembersIndex: Int? = null
++    private val muteGroupMemberButtons = mutableMapOf<String, Button>()
+     // Открытый экран "MAIN N DETAIL" (EQ/компрессор) - для live-обновления
+     // ползунков при входящих push, пока экран виден.
+     // Экран деталей aux-шины/Main Out (общий, group_detail.xml) - какая
+@@ -687,6 +694,7 @@
+     private val auxStrips = mutableListOf<SimpleStripUi>()
+     private val auxBusStrips = mutableListOf<SimpleStripUi>()
+     private val vcaStrips = mutableListOf<SimpleStripUi>()
++    private val muteGroupStrips = mutableListOf<SimpleStripUi>()
+     private val mainOutStrips = mutableListOf<SimpleStripUi>()
+ 
+     /**
+@@ -705,7 +713,9 @@
+         onMute: (Boolean) -> Unit,
+         onSolo: (Boolean) -> Unit,
+         onSoloB: (Boolean) -> Unit,
+-        showSoloB: Boolean = false // Убрано по просьбе пользователя
++        showSoloB: Boolean = false, // Убрано по просьбе пользователя
++        showFader: Boolean = true,
++        showSolo: Boolean = true
+     ): SimpleStripUi {
+         val inflater = LayoutInflater.from(this)
+         val strip = inflater.inflate(R.layout.channel_strip, container, false)
+@@ -731,6 +741,13 @@
+         muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
+         soloButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
+ 
++        // У мьют-группы на пульте нет ни фейдера, ни solo - это просто
++        // кнопка MUTE. Прячем лишние виджеты вместо создания отдельного
++        // XML-layout под один частный случай.
++        fader.visibility = if (showFader) android.view.View.VISIBLE else android.view.View.GONE
++        levelText.visibility = if (showFader) android.view.View.VISIBLE else android.view.View.GONE
++        soloButton.visibility = if (showSolo) android.view.View.VISIBLE else android.view.View.GONE
++
+         // Вторая шина solo - ПОДТВЕРЖДЕНО реальным захватом. Только для
+         // мастера/aux returns/aux-шин (у обычных 56 каналов остаётся
+         // скрытой - там Solo B в детальном экране).
+@@ -875,6 +892,42 @@
+     }
+ 
+     /**
++     * Мьют-группы (8 шт.) - точная копия buildVcaStrips() выше. Структура
++     * ещё не подтверждена собственным захватом трафика (взята из датасета
++     * muffeeee, см. подробную заметку у Pro2Commands.muteGroupMuteAddress()),
++     * поэтому: (1) нет фейдера и solo - у мьют-группы на пульте это просто
++     * кнопка MUTE, без уровня и соло; (2) в заголовке полосы предупреждение,
++     * снимается после первой проверки на реальном пульте.
++     */
++    private fun buildMuteGroupStrips() {
++        val container = findViewById<android.widget.LinearLayout>(R.id.containerMuteGroups)
++        container.removeAllViews()
++        muteGroupStrips.clear()
++        for (g in 0 until ConnectionHolder.MUTE_GROUP_COUNT) {
++            val data = ConnectionHolder.muteGroupData[g]
++            val ui = buildSimpleStrip(
++                container, "MUTE ${g + 1}", initialFader = 0f, initialMuted = data.mutedLocal, initialSoloB = false,
++                onFader = { /* у мьют-группы нет фейдера - не вызывается, ползунок скрыт */ },
++                onMute = { muted ->
++                    ConnectionHolder.muteGroupData[g].mutedLocal = muted
++                    // enMuteGroupMute - подтверждённый датасетом toggle:
++                    // "This toggles the mute groups to be muted or unmuted" -
++                    // шлём константу 1 независимо от целевого состояния,
++                    // пульт сам переключает (см. setMuteGroupMute()).
++                    sendRawAsync(Pro2Commands.setMuteGroupMute(g))
++                },
++                onSolo = { /* у мьют-группы нет solo */ },
++                onSoloB = { },
++                showSoloB = false,
++                showFader = false,
++                showSolo = false
++            )
++            muteGroupStrips.add(ui)
++            ui.headerView.setOnClickListener { openMuteGroupMembers(g) }
++        }
++    }
++
++    /**
+      * Main Outs (8 позиций, "matrix out" на самом пульте). Базовая полоса
+      * (фейдер/mute/solo/имя/цвет) - см. подробную заметку у
+      * Pro2Commands.mainOut*Address(). EQ/компрессор Main Outs пока не
+@@ -971,13 +1024,15 @@
+         val btnMainOuts = makeTab("MATRIX", StripMode.MAIN_OUTS)
+         val btnMaster = makeTab("MASTER", StripMode.MASTER)
+         val btnVca = makeTab("VCA", StripMode.VCA)
++        val btnMuteGroups = makeTab("MUTE", StripMode.MUTE_GROUPS)
+         modeButtons = mapOf(
+             StripMode.CHANNELS to btnChannels,
+             StripMode.AUX_BUS to btnAuxBus,
+             StripMode.AUX_RETURNS to btnAux,
+             StripMode.MAIN_OUTS to btnMainOuts,
+             StripMode.MASTER to btnMaster,
+-            StripMode.VCA to btnVca
++            StripMode.VCA to btnVca,
++            StripMode.MUTE_GROUPS to btnMuteGroups
+         )
+ 
+         switchStripMode(ConnectionHolder.uiStripMode)
+@@ -1008,6 +1063,8 @@
+             if (mode == StripMode.AUX_BUS) android.view.View.VISIBLE else android.view.View.GONE
+         findViewById<android.view.View>(R.id.containerVca).visibility =
+             if (mode == StripMode.VCA) android.view.View.VISIBLE else android.view.View.GONE
++        findViewById<android.view.View>(R.id.containerMuteGroups).visibility =
++            if (mode == StripMode.MUTE_GROUPS) android.view.View.VISIBLE else android.view.View.GONE
+         findViewById<android.view.View>(R.id.containerMaster).visibility =
+             if (mode == StripMode.MASTER) android.view.View.VISIBLE else android.view.View.GONE
+         findViewById<android.view.View>(R.id.containerMainOuts).visibility =
+@@ -1398,8 +1455,11 @@
+                 if (blob.size >= 4) {
+                     val raw = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+                     ConnectionHolder.channelData[sub.channel].channelSource = raw
++                    if (ConnectionHolder.patchBaseline[sub.channel] == null) {
++                        ConnectionHolder.patchBaseline[sub.channel] = raw
++                    }
+                     if (openDetailChannel == sub.channel) {
+-                        detailChannelSourceText?.text = "SOURCE: $raw"
++                        detailChannelSourceText?.text = sourceLabel(raw)
+                     }
+                 }
+             }
+@@ -1640,6 +1700,31 @@
+             else -> {}
+         }
+     }
++    /**
++     * Базовое состояние мьют-группы (только MUTE и имя - у мьют-группы на
++     * пульте нет ни фейдера, ни solo, ни цвета). Точная копия
++     * соответствующих веток handleVcaSubscribedValue.
++     */
++    internal fun handleMuteGroupSubscribedValue(sub: Subscription, blob: ByteArray) {
++        when (sub.kind) {
++            ParamKind.MUTE -> {
++                val muted = blob.size >= 4 &&
++                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
++                ConnectionHolder.muteGroupData[sub.channel].mutedLocal = muted
++                val ui = muteGroupStrips.getOrNull(sub.channel) ?: return
++                ui.mutedLocal = muted
++                ui.muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
++            }
++            ParamKind.NAME -> {
++                val name = String(blob, Charsets.US_ASCII).trimEnd('\u0000')
++                if (name.isBlank()) return
++                ConnectionHolder.muteGroupData.getOrNull(sub.channel)?.name = name
++                muteGroupStrips.getOrNull(sub.channel)?.labelView?.text = name
++            }
++            else -> { /* у мьют-группы других полей нет */ }
++        }
++    }
++
+     internal fun handleVcaSubscribedValue(sub: Subscription, blob: ByteArray) {
+         when (sub.kind) {
+             ParamKind.FADER -> {
+@@ -1716,6 +1801,28 @@
+     }
+ 
+     /**
++     * Push-обновление членства одного "ребёнка" в мьют-группе. Точная
++     * копия handleVcaMemberSubscribedValue() выше.
++     */
++    internal fun handleMuteGroupMemberSubscribedValue(sub: MuteGroupMemberSub, blob: ByteArray) {
++        val member = blob.size >= 4 &&
++            ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
++        val g = ConnectionHolder.muteGroupData.getOrNull(sub.groupIndex) ?: return
++        when (sub.childType) {
++            "input" -> g.memberInput.getOrNull(sub.childIndex)?.let { g.memberInput[sub.childIndex] = member }
++            "submix" -> g.memberSubMix.getOrNull(sub.childIndex)?.let { g.memberSubMix[sub.childIndex] = member }
++            "auxreturn" -> g.memberAuxReturn.getOrNull(sub.childIndex)?.let { g.memberAuxReturn[sub.childIndex] = member }
++            "main" -> g.memberMain.getOrNull(sub.childIndex)?.let { g.memberMain[sub.childIndex] = member }
++            "master" -> g.memberMaster.getOrNull(sub.childIndex)?.let { g.memberMaster[sub.childIndex] = member }
++        }
++        if (openMuteGroupMembersIndex == sub.groupIndex) {
++            val btn = muteGroupMemberButtons["${sub.childType}:${sub.childIndex}"] ?: return
++            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (member) "#ff9f0a" else "#3a3a3c"))
++            btn.setTextColor(Color.parseColor(if (member) "#000000" else "#ffffff"))
++        }
++    }
++
++    /**
+      * Main Outs (8 позиций) - базовая полоса. См. заметку в
+      * Pro2Commands.kt у mainOut*Address() про степень подтверждённости.
+      */
+@@ -1987,6 +2094,125 @@
+     private var detailPhaseButton: Button? = null
+     private var detailLinkButton: Button? = null
+     private var detailChannelSourceText: TextView? = null
++
++    // ===== ПАТЧИНГ ВХОДА (тестовая реализация) =====================
++    //
++    // Кодировка uSource подтверждена уровнем A (12 точек живого трафика по
++    // DL251 + 3 по локальным входам). Сторона ЗАПИСИ в захватах не
++    // наблюдалась ни разу, но enChannelColour - параметр того же типа
++    // (enPPCIntegerMessage) в той же группе, и его запись тегами ",ii"
++    // давно работает на реальном пульте. Поэтому пишем так же и начинаем
++    // с безопасного no-op.
++
++    /** Подпись источника: расшифровка, если форма известна, иначе сырое число. */
++    private fun sourceLabel(raw: Int): String {
++        if (raw == -1) return "SOURCE: —"
++        val human = Pro2Commands.describeSource(raw)
++        return if (human != null) "SOURCE: $human" else "SOURCE: 0x%08x (не распознан)".format(raw)
++    }
++
++    private fun showPatchDialog(channel: Int) {
++        val current = ConnectionHolder.channelData[channel].channelSource
++        val baseline = ConnectionHolder.patchBaseline[channel]
++        val currentLabel = if (current != -1) sourceLabel(current) else "SOURCE: —"
++
++        // Двухшаговый выбор вместо одного списка на 58 пунктов (48 DL251 +
++        // 8 локальных + служебные). Плоский список неудобен для живой
++        // работы за пультом - инженеру пришлось бы скроллить посреди
++        // выступления. Сначала категория, потом номер колесом (NumberPicker).
++        val labels = mutableListOf<String>()
++        val actions = mutableListOf<() -> Unit>()
++
++        labels.add("DL251 (выбрать канал 1–48)")
++        actions.add {
++            showNumberPickerDialog(1, 48, "DL251 — физический канал") { ch ->
++                confirmAndSend(channel, Pro2Commands.dl251Source(ch), "DL251 ch $ch")
++            }
++        }
++        labels.add("Локальный вход (выбрать 1–8)")
++        actions.add {
++            showNumberPickerDialog(1, 8, "Локальный вход") { inp ->
++                confirmAndSend(channel, Pro2Commands.localInputSource(inp), "Локальный вход $inp")
++            }
++        }
++        if (current != -1) {
++            labels.add("NO-OP — записать то же значение ($currentLabel)")
++            actions.add { confirmAndSend(channel, current, "NO-OP (без изменений)") }
++        }
++        labels.add("Распатчить (Silence)")
++        actions.add { confirmAndSend(channel, Pro2Commands.SOURCE_SILENCE, "не назначен") }
++        if (baseline != null) {
++            labels.add("↩ Вернуть исходный (${Pro2Commands.describeSource(baseline) ?: "0x%08x".format(baseline)})")
++            actions.add { confirmAndSend(channel, baseline, "исходный источник") }
++        }
++
++        android.app.AlertDialog.Builder(this)
++            .setTitle("Патчинг канала ${channel + 1} ($currentLabel)")
++            .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
++            .setNegativeButton("Отмена", null)
++            .show()
++    }
++
++    /**
++     * Общий диалог выбора числа колесом - используется и для DL251 (1-48),
++     * и для локальных входов (1-8). NumberPicker - стандартный Android-
++     * виджет, создаётся программно, отдельный layout не нужен.
++     */
++    private fun showNumberPickerDialog(min: Int, max: Int, title: String, onPicked: (Int) -> Unit) {
++        val picker = android.widget.NumberPicker(this).apply {
++            minValue = min
++            maxValue = max
++            value = min
++            wrapSelectorWheel = false
++        }
++        val padding = (16 * resources.displayMetrics.density).toInt()
++        val container = android.widget.FrameLayout(this).apply {
++            setPadding(padding, padding, padding, padding)
++            addView(picker, android.widget.FrameLayout.LayoutParams(
++                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
++                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
++                android.view.Gravity.CENTER
++            ))
++        }
++        android.app.AlertDialog.Builder(this)
++            .setTitle(title)
++            .setView(container)
++            .setPositiveButton("Далее") { _, _ ->
++                // Значение колеса не всегда успевает зафиксироваться, если
++                // палец ещё касается виджета в момент тапа по кнопке -
++                // clearFocus() принудительно фиксирует текущее положение.
++                picker.clearFocus()
++                onPicked(picker.value)
++            }
++            .setNegativeButton("Отмена", null)
++            .show()
++    }
++
++    /**
++     * Второе подтверждение перед реальной записью. Патчинг меняет
++     * маршрутизацию звука, поэтому случайный тап по списку не должен
++     * ничего переключать.
++     */
++    private fun confirmAndSend(channel: Int, uSource: Int, human: String) {
++        android.app.AlertDialog.Builder(this)
++            .setTitle("Подтвердите")
++            .setMessage(
++                "Канал ${channel + 1} → $human\n\n" +
++                    "Значение: 0x%08x (dec %d)\n\n".format(uSource, uSource) +
++                    "Это изменит реальную маршрутизацию звука на пульте."
++            )
++            .setPositiveButton("Записать") { _, _ ->
++                sendRawAsync(Pro2Commands.setChannelSource(channel, uSource))
++                android.widget.Toast.makeText(
++                    this,
++                    "Отправлено: 0x%08x → канал ${channel + 1}".format(uSource),
++                    android.widget.Toast.LENGTH_SHORT
++                ).show()
++            }
++            .setNegativeButton("Отмена", null)
++            .show()
++    }
++
+     private var detailHpFilterInButton: Button? = null
+     private var detailLpFilterInButton: Button? = null
+     private var detailHpFreqSeek: SeekBar? = null
+@@ -2308,6 +2534,118 @@
+     }
+ 
+     /**
++     * Экран участников мьют-группы - точная копия openVcaMembers() выше,
++     * только layout/группа/адреса другие. ⚠ Структура НЕ подтверждена
++     * собственным захватом трафика (см. заметку у Pro2Commands.kt).
++     */
++    private fun openMuteGroupMembers(groupIndex: Int) {
++        val view = LayoutInflater.from(this).inflate(R.layout.activity_mute_group_members, channelDetailContainer, false)
++        channelDetailContainer.removeAllViews()
++        channelDetailContainer.addView(view)
++        channelDetailContainer.visibility = android.view.View.VISIBLE
++
++        openMuteGroupMembersIndex = groupIndex
++        muteGroupMemberButtons.clear()
++
++        view.findViewById<TextView>(R.id.textMuteGroupMembersTitle).text = "MUTE GROUP ${groupIndex + 1} MEMBERS"
++        view.findViewById<Button>(R.id.btnMuteGroupMembersBack).setOnClickListener {
++            channelDetailContainer.visibility = android.view.View.GONE
++            channelDetailContainer.removeAllViews()
++            openMuteGroupMembersIndex = null
++            muteGroupMemberButtons.clear()
++        }
++
++        val container = view.findViewById<android.widget.LinearLayout>(R.id.containerMuteGroupMembers)
++        container.removeAllViews()
++
++        fun sectionHeader(title: String) {
++            val header = TextView(this).apply {
++                text = title
++                setTextColor(Color.parseColor("#ff9f0a"))
++                setTypeface(typeface, android.graphics.Typeface.BOLD)
++                textSize = 13f
++                setPadding(0, 20, 0, 8)
++            }
++            container.addView(header)
++        }
++
++        fun memberGrid(labels: List<String>, childType: String, initial: (Int) -> Boolean, onToggle: (index: Int, member: Boolean) -> Unit) {
++            var row: android.widget.LinearLayout? = null
++            for ((i, label) in labels.withIndex()) {
++                if (i % 4 == 0) {
++                    row = android.widget.LinearLayout(this).apply {
++                        orientation = android.widget.LinearLayout.HORIZONTAL
++                    }
++                    container.addView(row, android.widget.LinearLayout.LayoutParams(
++                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
++                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
++                    ).apply { bottomMargin = 6 })
++                }
++                var memberState = initial(i)
++                val btn = Button(this).apply {
++                    setBackgroundResource(R.drawable.console_button_background)
++                    text = label
++                    textSize = 10f
++                    minHeight = 0
++                    backgroundTintList = null
++                    setPadding(4, 12, 4, 12)
++                    setTextColor(Color.parseColor(if (memberState) "#000000" else "#ffffff"))
++                    backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (memberState) "#ff9f0a" else "#3a3a3c"))
++                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
++                        .apply { marginEnd = 4 }
++                    setOnClickListener {
++                        memberState = !memberState
++                        backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (memberState) "#ff9f0a" else "#3a3a3c"))
++                        setTextColor(Color.parseColor(if (memberState) "#000000" else "#ffffff"))
++                        onToggle(i, memberState)
++                    }
++                }
++                muteGroupMemberButtons["$childType:$i"] = btn
++                row?.addView(btn)
++            }
++        }
++
++        val group = ConnectionHolder.muteGroupData[groupIndex]
++
++        sectionHeader("ВХОДНЫЕ КАНАЛЫ (1-56)")
++        memberGrid((1..56).map { n ->
++            val realName = ConnectionHolder.channelData.getOrNull(n - 1)?.name?.takeIf { it.isNotBlank() }
++            if (realName != null) "$n: $realName" else "CH $n"
++        }, "input", { i -> group.memberInput.getOrElse(i) { false } }) { i, member ->
++            sendRawAsync(Pro2Commands.setMuteGroupChildInput(i, groupIndex, member))
++        }
++
++        sectionHeader("AUX-ШИНЫ (1-16)")
++        memberGrid((1..16).map { n ->
++            val realName = ConnectionHolder.auxBusData.getOrNull(n - 1)?.name?.takeIf { it.isNotBlank() }
++            if (realName != null) "$n: $realName" else "BUS $n"
++        }, "submix", { i -> group.memberSubMix.getOrElse(i) { false } }) { i, member ->
++            sendRawAsync(Pro2Commands.setMuteGroupChildSubMix(i, groupIndex, member))
++        }
++
++        sectionHeader("AUX RETURNS (1-8)")
++        memberGrid((1..8).map { n ->
++            val realName = ConnectionHolder.auxReturnData.getOrNull(n - 1)?.name?.takeIf { it.isNotBlank() }
++            if (realName != null) "$n: $realName" else "AUX $n"
++        }, "auxreturn", { i -> group.memberAuxReturn.getOrElse(i) { false } }) { i, member ->
++            sendRawAsync(Pro2Commands.setMuteGroupChildAuxReturn(i, groupIndex, member))
++        }
++
++        sectionHeader("MAIN OUTS (1-8)")
++        memberGrid((1..8).map { "MAIN $it" }, "main", { i -> group.memberMain.getOrElse(i) { false } }) { i, member ->
++            sendRawAsync(Pro2Commands.setMuteGroupChildMain(i, groupIndex, member))
++        }
++
++        sectionHeader("МАСТЕР")
++        memberGrid(listOf("MASTER L", "MASTER R", "MASTER C"), "master", { i -> group.memberMaster.getOrElse(i) { false } }) { i, member ->
++            val letter = listOf("L", "R", "C")[i]
++            sendRawAsync(Pro2Commands.setMuteGroupChildMaster(letter, groupIndex, member))
++        }
++
++        subscribeMuteGroupMembers(groupIndex)
++    }
++
++    /**
+      * Общий блок компрессора (график + сетка крутилок) для aux-шины и Main
+      * Out - визуально та же структура, что и buildDynamicsBlock у канала
+      * (тот же TransferCurveView, тот же RotaryKnobView, та же сетка 2 в
+@@ -2775,7 +3113,10 @@
+             groupDetailKnobs[key] = knob
+         }
+ 
+-        addKnob("${ParamKind.COMP_PRESENCE}:0", "PRESENCE", data.compPresence, ParamKind.COMP_PRESENCE) { v -> data.compPresence = v; sendRawAsync(Pro2Commands.setMainOutCompPresence(index, v)) }
++        // PRESENCE убран: у MainOuts такого параметра нет. Пульт отвечал на
++        // подписку пустым blob-ом (7241 раз, ни одного значения), и датасет
++        // подтверждает - enCompLimPresence есть у Masters/MicInputs, но не
++        // здесь. Ручка была живой на вид, но не управляла ничем.
+         addKnob("${ParamKind.BUS_TRIM}:0", "BUS TRIM", data.busTrim) { v -> data.busTrim = v; sendRawAsync(Pro2Commands.setMainOutBusTrim(index, v)) }
+ 
+         fun addCycleButton(kind: ParamKind, label: String, initial: Int, onTap: () -> Unit) {
+@@ -2796,9 +3137,12 @@
+             groupDetailCycleButtons["$kind"] = btn
+         }
+ 
++        // STYLE остаётся - подтверждён живым трафиком (реальные значения),
++        // несмотря на то что в датасете его нет ни в одной группе.
+         addCycleButton(ParamKind.COMP_STYLE, "STYLE", data.compStyle) { sendRawAsync(Pro2Commands.setMainOutCompStyleNext(index)) }
+-        addCycleButton(ParamKind.COMP_FILTER_BANDWIDTH, "FILTER BANDWIDTH", data.compFilterBandwidth) { sendRawAsync(Pro2Commands.setMainOutCompFilterBandwidthNext(index)) }
+-        addCycleButton(ParamKind.COMP_KNEE, "KNEE", data.compKnee) { sendRawAsync(Pro2Commands.setMainOutCompKneeNext(index)) }
++        // FILTER BANDWIDTH и KNEE убраны по той же причине, что и PRESENCE:
++        // у MainOuts этих параметров нет (пустой blob в ответ на подписку,
++        // подтверждено датасетом). Их место - Masters / MicInputs / SubMixes.
+     }
+ 
+     /**
+@@ -3266,12 +3610,23 @@
+         }
+         detailLinkButton = btnLink
+ 
+-        // Патчинг - только чтение, см. заметку в XML/Pro2Commands.kt.
++        // Патчинг - чтение + ТЕСТОВАЯ запись, см. заметку в Pro2Commands.kt.
+         val textSource = view.findViewById<TextView>(R.id.textDetailChannelSource)
+         val currentSource = ConnectionHolder.channelData[channel].channelSource
+-        textSource.text = if (currentSource >= 0) "SOURCE: $currentSource" else "SOURCE: —"
++        textSource.text = sourceLabel(currentSource)
+         detailChannelSourceText = textSource
+ 
++        // Запоминаем исходный источник ОДИН раз на канал - чтобы после
++        // тестов можно было вернуть ровно то, что было до нашего
++        // вмешательства, а не "то, что кажется правильным".
++        if (currentSource != -1 && ConnectionHolder.patchBaseline[channel] == null) {
++            ConnectionHolder.patchBaseline[channel] = currentSource
++        }
++
++        view.findViewById<Button>(R.id.btnDetailPatch).setOnClickListener {
++            showPatchDialog(channel)
++        }
++
+         val seekPan = view.findViewById<SeekBar>(R.id.seekDetailPan)
+         val textPan = view.findViewById<TextView>(R.id.textDetailPanValue)
+         detailPanSeek = seekPan
+@@ -4646,6 +5001,7 @@
+                 handles.addAll(ConnectionHolder.vcaSubscriptions.keys)
+                 handles.addAll(ConnectionHolder.mainOutSubscriptions.keys)
+                 handles.addAll(ConnectionHolder.vcaMemberSubscriptions.keys)
++                handles.addAll(ConnectionHolder.muteGroupMemberSubscriptions.keys)
+                 CoroutineScope(Dispatchers.IO).launch {
+                     for (handle in handles) {
+                         try {
+@@ -4661,18 +5017,12 @@
+             }
+             receiveJob?.cancel()
+             pollJob?.cancel()
+-            subscriptions.clear()
+-            masterSubscriptions.clear()
+-            auxSubscriptions.clear()
+-            auxBusSubscriptions.clear()
+-            vcaSubscriptions.clear()
+-            mainOutSubscriptions.clear()
+-            ConnectionHolder.vcaMemberSubscriptions.clear()
+-            auxSendsSubscribed.clear()
+-            eqSubscribed.clear()
+-            gateSubscribed.clear()
+-            inputExtrasSubscribed.clear()
+-            compGateExtrasSubscribed.clear()
++            // ИСПРАВЛЕНИЕ: раньше карты перечислялись здесь вручную и две
++            // из них (mainOutExtrasSubscribed, auxBusExtrasSubscribed) не
++            // очищались - после смены режима детальные экраны MATRIX и AUX
++            // считали себя уже подписанными и молча переставали
++            // обновляться. Теперь одна общая функция.
++            ConnectionHolder.clearAllSubscriptionState()
+             // Сбрасываем ТОЛЬКО признак подписки - следующий режим (при
+             // входе в MainActivity заново) должен подписаться с нуля под
+             // себя, а не решить, что он "восстанавливается после поворота".
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/MainActivityNetwork.kt	2026-08-23 19:37:04.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/MainActivityNetwork.kt	2026-08-31 11:02:22.552531046 +0000
+@@ -80,6 +80,55 @@
+         }
+     }
+ 
++    /**
++     * Подписка на членство ВСЕХ потенциальных "детей" в КОНКРЕТНОЙ
++     * мьют-группе - вызывается при открытии экрана "MUTE GROUP N MEMBERS".
++     * Точная копия subscribeVcaMembers() выше (см. подробную заметку там) -
++     * структура симметрична VCA, тоже НЕ подтверждена собственным захватом.
++     */
++    internal fun MainActivity.subscribeMuteGroupMembers(groupIndex: Int) {
++        val sock = socket ?: return
++        val address = consoleAddress ?: return
++        val port = consolePort
++        val token = sessionToken ?: return
++        val sid = sessionId
++
++        CoroutineScope(Dispatchers.IO).launch {
++            val jobs = listOf(
++                Triple("input", 56) { i: Int -> Pro2Commands.muteGroupChildInputAddress(i) },
++                Triple("submix", 16) { i: Int -> Pro2Commands.muteGroupChildSubMixAddress(i) },
++                Triple("auxreturn", 8) { i: Int -> Pro2Commands.muteGroupChildAuxReturnAddress(i) },
++                Triple("main", 8) { i: Int -> Pro2Commands.muteGroupChildMainAddress(i) }
++            )
++            for ((childType, count, addrFn) in jobs) {
++                for (i in 0 until count) {
++                    val handle = "/h_${sid}_mgm${groupIndex}_${childType}_$i"
++                    withContext(Dispatchers.Main) {
++                        muteGroupMemberSubscriptions[handle] = MuteGroupMemberSub(childType, i, groupIndex)
++                    }
++                    try {
++                        sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, addrFn(i), groupIndex, groupIndex, token))
++                    } catch (e: Exception) {
++                        // не критично
++                    }
++                    delay(2)
++                }
++            }
++            for ((i, letter) in listOf("L", "R", "C").withIndex()) {
++                val handle = "/h_${sid}_mgm${groupIndex}_master_$i"
++                withContext(Dispatchers.Main) {
++                    muteGroupMemberSubscriptions[handle] = MuteGroupMemberSub("master", i, groupIndex)
++                }
++                try {
++                    sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, Pro2Commands.muteGroupChildMasterAddress(letter), groupIndex, groupIndex, token))
++                } catch (e: Exception) {
++                    // не критично
++                }
++                delay(2)
++            }
++        }
++    }
++
+     internal fun MainActivity.subscribeChannelSendsForBus(bus: Int) {
+         val sock = socket ?: return
+         val address = consoleAddress ?: return
+@@ -151,6 +200,7 @@
+         allHandles.addAll(vcaSubscriptions.keys)
+         allHandles.addAll(mainOutSubscriptions.keys)
+         allHandles.addAll(ConnectionHolder.vcaMemberSubscriptions.keys)
++        allHandles.addAll(ConnectionHolder.muteGroupMemberSubscriptions.keys)
+         if (allHandles.isEmpty()) return
+         for (handle in allHandles) {
+             try {
+@@ -184,18 +234,13 @@
+             // Новое подключение - начинаем подписку с нуля.
+             withContext(Dispatchers.Main) {
+                 sessionToken = null
+-                subscribedAlready = false
+-                subscriptions.clear()
+-                masterSubscriptions.clear()
+-                auxSubscriptions.clear()
+-                auxBusSubscriptions.clear()
+-                vcaSubscriptions.clear()
+-                mainOutSubscriptions.clear()
+-                auxSendsSubscribed.clear()
+-                eqSubscribed.clear()
+-                gateSubscribed.clear()
+-                inputExtrasSubscribed.clear()
+-                compGateExtrasSubscribed.clear()
++                ConnectionHolder.releaseSubscribeGate()
++                // ИСПРАВЛЕНИЕ: раньше здесь перечислялись карты вручную и
++                // ТРИ из них забывались (vcaMemberSubscriptions,
++                // mainOutExtrasSubscribed, auxBusExtrasSubscribed) - из-за
++                // чего детальные экраны MATRIX/AUX после переподключения
++                // больше не переподписывались. Теперь одна общая функция.
++                ConnectionHolder.clearAllSubscriptionState()
+                 sessionId = System.currentTimeMillis().toString(36)
+             }
+ 
+@@ -256,9 +301,11 @@
+                 // Решение: подписываемся СРАЗУ с условным токеном-заглушкой (0),
+                 // не дожидаясь ответа. Если позже придёт настоящий токен от пульта -
+                 // sessionToken обновится, но переподписываться заново не обязательно.
+-                subscribedAlready = true
+                 sessionToken = 0
+-                if (appMode != MODE_MONITOR) {
++                // Замок: subscribeAll() выполнит только первый вызывающий.
++                // Берём его в обоих режимах - см. пояснение в MainActivity.
++                val firstClaim = ConnectionHolder.claimSubscribeAll()
++                if (firstClaim && appMode != MODE_MONITOR) {
+                     subscribeAll()
+                 }
+                 startPollLoop(newSocket, address, port)
+@@ -323,7 +370,14 @@
+ 
+     internal fun MainActivity.startReceiveLoop(socket: DatagramSocket) {
+         receiveJob = CoroutineScope(Dispatchers.IO).launch {
+-            val buffer = ByteArray(4096)
++            // ИСПРАВЛЕНИЕ: было 4096. DatagramPacket обрезает датаграмму по
++            // размеру буфера МОЛЧА - без исключения и без признака обрезки.
++            // Обрезанный бандл потом разбирается частично (парсер упирается
++            // в `pos + size > end` и прекращает разбор), то есть часть
++            // обновлений просто теряется, причём тем чаще, чем больше
++            // подписок. 64 КБ - максимальный размер UDP-датаграммы, так что
++            // обрезка исключена в принципе.
++            val buffer = ByteArray(65536)
+             socket.soTimeout = 1000
+             while (isActive) {
+                 try {
+@@ -372,13 +426,37 @@
+             val token = message.args[1] as? Int
+             if (token != null) {
+                 sessionToken = token
+-                if (!subscribedAlready) {
+-                    subscribedAlready = true
++                // Раньше здесь была неатомарная проверка !subscribedAlready -
++                // при гонке с потоком подключения подписка уходила дважды.
++                if (ConnectionHolder.claimSubscribeAll()) {
+                     subscribeAll()
+                 }
+             }
+         }
+ 
++        // ДИАГНОСТИКА: пульт отвечает на подписку ВСЕГДА, но если параметра
++        // в этой группе не существует, в ответ приходит blob НУЛЕВОЙ длины
++        // вместо обычных 4 байт. Раньше такие ответы просто молча
++        // отбрасывались проверками вида `blob.size >= 4`, и неработающий
++        // параметр было невозможно отличить от работающего: ручка рисуется,
++        // крутится, команды уходят - а пульт их игнорирует.
++        //
++        // Так были найдены сразу несколько ошибок в адресах (третья полоса
++        // канального EQ, gain EQ aux-шин, три параметра компрессора MATRIX).
++        // Теперь каждый такой параметр попадает в лог ровно один раз.
++        if (message.typeTag == ",bi" && message.args.isNotEmpty()) {
++            val probe = message.args[0] as? ByteArray
++            if (probe != null && probe.isEmpty() &&
++                ConnectionHolder.unsupportedHandles.add(message.address)
++            ) {
++                android.util.Log.w(
++                    "MidasUnsupported",
++                    "Пульт вернул пустое значение для ${message.address} - " +
++                        "параметра нет в этой группе, адрес нужно проверить"
++                )
++            }
++        }
++
+         // Путь 1: это ответ на нашу подписку?
+         val subscription = subscriptions[message.address]
+         if (subscription != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
+@@ -410,6 +488,12 @@
+             handleVcaSubscribedValue(vcaSub, blob)
+             return
+         }
++        val muteGroupSub = ConnectionHolder.muteGroupSubscriptions[message.address]
++        if (muteGroupSub != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
++            val blob = message.args[0] as? ByteArray ?: return
++            handleMuteGroupSubscribedValue(muteGroupSub, blob)
++            return
++        }
+         val mainOutSub = mainOutSubscriptions[message.address]
+         if (mainOutSub != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
+             val blob = message.args[0] as? ByteArray ?: return
+@@ -422,6 +506,12 @@
+             handleVcaMemberSubscribedValue(vcaMemberSub, blob)
+             return
+         }
++        val muteGroupMemberSub = ConnectionHolder.muteGroupMemberSubscriptions[message.address]
++        if (muteGroupMemberSub != null && message.typeTag == ",bi" && message.args.isNotEmpty()) {
++            val blob = message.args[0] as? ByteArray ?: return
++            handleMuteGroupMemberSubscribedValue(muteGroupMemberSub, blob)
++            return
++        }
+ 
+         // Путь 2: человекочитаемый адрес (см. примечание выше - по факту не срабатывает,
+         // оставлено на будущее / на случай другой прошивки пульта).
+@@ -597,6 +687,28 @@
+                 }
+             }
+ 
++            // Мьют-группы (8 шт.) - базовое состояние (mute-кнопка + имя).
++            // Членство детей подписывается отдельно, лениво, только при
++            // открытии экрана участников (см. subscribeMuteGroupMembers) -
++            // как и у VCA, 5 полей x 56+16+8+8+3 = слишком много для
++            // безусловной подписки при каждом входе в приложение.
++            // ⚠ Структура НЕ подтверждена собственным захватом трафика.
++            for (g in 0 until ConnectionHolder.MUTE_GROUP_COUNT) {
++                val muteGroupSubs = listOf(
++                    "/h_${sid}_mg${g}_mute" to Triple(Pro2Commands.muteGroupMuteAddress(), ParamKind.MUTE, g),
++                    "/h_${sid}_mg${g}_name" to Triple(Pro2Commands.muteGroupNameAddress(), ParamKind.NAME, g),
++                )
++                for ((handle, info) in muteGroupSubs) {
++                    val (path, kind, gIdx) = info
++                    withContext(Dispatchers.Main) { ConnectionHolder.muteGroupSubscriptions[handle] = Subscription(gIdx, kind) }
++                    try {
++                        sendRaw(sock, address, port, Pro2Commands.batchSubscribe(handle, path, gIdx, gIdx, token))
++                    } catch (e: Exception) {
++                        // не критично - не прерываем остальное
++                    }
++                }
++            }
++
+             // Main Outs (8 шт., "matrix out" на пульте) - базовая полоса.
+             // fader ПОДТВЕРЖДЁН сторонним датасетом; mute/solo/цвет/метр -
+             // по аналогии с остальными группами (см. заметку в
+@@ -764,17 +876,21 @@
+             // Новые параметры - ПОДТВЕРЖДЕНЫ реальным захватом трафика
+             // (all config ipad.pcapng), поведение не проверялось.
+             subs.add("/h_${sid}_mo${index}_link" to Subscription(index, ParamKind.LINK))
+-            subs.add("/h_${sid}_mo${index}_presence" to Subscription(index, ParamKind.COMP_PRESENCE))
+             subs.add("/h_${sid}_mo${index}_bustrim" to Subscription(index, ParamKind.BUS_TRIM))
+             subs.add("/h_${sid}_mo${index}_compstyle" to Subscription(index, ParamKind.COMP_STYLE))
+-            subs.add("/h_${sid}_mo${index}_filterbw" to Subscription(index, ParamKind.COMP_FILTER_BANDWIDTH))
+-            subs.add("/h_${sid}_mo${index}_knee" to Subscription(index, ParamKind.COMP_KNEE))
+             paths["/h_${sid}_mo${index}_link"] = Pro2Commands.mainOutPairingAddress()
+-            paths["/h_${sid}_mo${index}_presence"] = Pro2Commands.mainOutCompPresenceAddress()
+             paths["/h_${sid}_mo${index}_bustrim"] = Pro2Commands.mainOutBusTrimAddress()
+             paths["/h_${sid}_mo${index}_compstyle"] = Pro2Commands.mainOutCompStyleAddress()
+-            paths["/h_${sid}_mo${index}_filterbw"] = Pro2Commands.mainOutCompFilterBandwidthAddress()
+-            paths["/h_${sid}_mo${index}_knee"] = Pro2Commands.mainOutCompKneeAddress()
++            // УБРАНЫ: presence / filterbw / knee.
++            // Пульт отвечал на эти подписки blob-ом НУЛЕВОЙ длины, то есть
++            // "такого параметра в этой группе нет" - по 7241 ответу на
++            // каждый, ни одного значения. Датасет подтверждает независимо:
++            // enCompLimPresence / enCompLimKnee / enCompLimFilterBandwidth
++            // существуют у Masters, MicInputs и SubMixes, но НЕ у MainOuts.
++            // Изначально они были приписаны MainOuts по ошибке при разборе
++            // захвата. enCompStyle, наоборот, ОСТАЁТСЯ - он у MainOuts
++            // реальный (7241 ответ с настоящими 4-байтовыми значениями),
++            // хотя в датасете его нет вообще ни в одной группе.
+ 
+             withContext(Dispatchers.Main) {
+                 for ((handle, sub) in subs) mainOutSubscriptions[handle] = sub
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/Pro2Commands.kt	2026-08-23 19:37:04.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/Pro2Commands.kt	2026-08-31 11:02:15.630723761 +0000
+@@ -72,16 +72,61 @@
+     // ("unknown") - нужна проверка на реальном пульте.
+     fun linkAddress() = "/enPPCSwitchMessage/$GROUP/enChannelLinked"
+ 
+-    // === Патчинг (какой физический вход подключён к каналу) - ТОЛЬКО
+-    // ЧТЕНИЕ, специально без set-функции. Подтверждено найденным в архиве
+-    // Pro2 Offline Editor, что значение - составная упакованная структура
+-    // (тип устройства + DeviceID + номер карты через битовые поля), а не
+-    // простой номер входа - без расшифрованной формулы отправка
+-    // произвольного числа рискует переключить канал на неожиданный
+-    // физический вход прямо во время живого выступления. Сначала собираем
+-    // данные (какое число соответствует какому реальному входу), потом
+-    // добавим запись.
++    // === ПАТЧИНГ ВХОДА (enChannelSource) - кодировка РАСШИФРОВАНА, уровень A.
++    //
++    // Значение - 32-битное беззнаковое:
++    //     uSource = Type            (биты 0-7,  младший байт)
++    //             | path    << 8    (биты 8-19, 12 бит)
++    //             | Channel << 20   (биты 20-27, 8 бит)
++    // Отдельный флаг 0x80000000 = Silence Bit (источник не назначен).
++    //
++    // Подтверждено четырьмя независимыми путями: разбор Mac Offline Editor,
++    // SceneData::ConvertDSPSource, CSystemInputSource::Assign в реальной
++    // прошивке, и живой сетевой трафик с Pro2 (12 точек по DL251, обе
++    // границы; 3 точки по локальным входам).
++    //
++    // ВАЖНО про запись: формат записи отдельно не наблюдался в захватах,
++    // НО enChannelColour - параметр того же типа (enPPCIntegerMessage), в
++    // той же группе, и его запись тегами ",ii" (индекс канала + int32
++    // значение) давно работает на реальном пульте. Поэтому пишем так же.
+     fun channelSourceAddress() = "/enPPCIntegerMessage/$GROUP/enChannelSource"
++
++    /** Источник не назначен (распатчено). */
++    const val SOURCE_SILENCE: Int = -2147483648 // 0x80000000
++
++    /** DL251 (Type 42), сквозной физический канал 1..48, path всегда 0. */
++    fun dl251Source(physicalChannel: Int): Int =
++        42 or ((physicalChannel - 1) shl 20)
++
++    /** Локальный вход поверхности (Type 14 LineIOCPU, path 17), вход 1..8. */
++    fun localInputSource(physicalInput: Int): Int =
++        0x110e or ((physicalInput - 1) shl 20)
++
++    /**
++     * Человекочитаемая расшифровка uSource. Возвращает null, если значение
++     * не соответствует ни одной ПОДТВЕРЖДЁННОЙ трафиком форме - в этом
++     * случае наверху показываем сырое число, а не выдумываем подпись.
++     */
++    fun describeSource(uSource: Int): String? {
++        if (uSource == SOURCE_SILENCE) return "не назначен"
++        if (uSource < 0) return null
++        val type = uSource and 0xFF
++        val path = (uSource shr 8) and 0xFFF
++        val channel = (uSource shr 20) and 0xFF
++        return when {
++            type == 42 && path == 0 && channel <= 47 -> "DL251 ch ${channel + 1}"
++            type == 14 && path == 17 && channel <= 7 -> "Локальный вход ${channel + 1}"
++            else -> null
++        }
++    }
++
++    /**
++     * ЗАПИСЬ патчинга. Вызывать только осознанно - меняет реальную
++     * маршрутизацию звука на пульте.
++     */
++    fun setChannelSource(channelIndex: Int, uSource: Int): ByteArray =
++        OscUtil.encode(channelSourceAddress(), listOf(channelIndex, uSource))
++
+     // ПОДТВЕРЖДЕНО реальным трафиком Mixtender 2 (перехват "TRIM" ручки на канале 32):
+     // адрес enInputGain НЕ используется приложением для этой ручки вообще -
+     // реально используется enMicSplitStepGain. Обозначение в JSON-файле muffeeee
+@@ -337,16 +382,25 @@
+     private fun eqBandSuffix(band: EqBand) = when (band) {
+         EqBand.BASS -> "Bass"
+         EqBand.LOW_MID -> "LowMid"
+-        EqBand.MID_HIGH -> "MidHigh"
++        // ИСПРАВЛЕНО: было "MidHigh". Реальное имя в прошивке -
++        // "HighMid" (enPEQFrequencyHighMid / enPEQGainHighMid /
++        // enPEQWidthHighMid). С "MidHigh" пульт отвечал на подписку
++        // blob-ом НУЛЕВОЙ длины, то есть "такого параметра нет", и вся
++        // третья полоса эквалайзера молча не работала. В датасете
++        // muffeeee тут опечатка - там указано MidHigh.
++        EqBand.MID_HIGH -> "HighMid"
+         EqBand.TREBLE -> "Treble"
+     }
+ 
+     fun eqInAddress() = "/enPPCSwitchMessage/$GROUP/enPEQIn"
+     fun eqBandActiveAddress(band: EqBand): String {
+-        // ВАЖНО: у high-mid параметр называется enPEQHighMid (без "Active" в
+-        // конце), у остальных трёх - enPEQ<Band>Active. Несогласованность
++        // ИСПРАВЛЕНО: было enPEQHighMid (без "Active"). Пульт отвечал
++        // пустым blob-ом. В прошивке параметр называется
++        // enPEQHighMidActive - то есть схема как раз согласованная,
++        // enPEQ<Band>Active для всех четырёх полос.
++        // Историческая заметка: несогласованность
+         // есть уже в самом списке команд, не опечатка с нашей стороны.
+-        val name = if (band == EqBand.MID_HIGH) "enPEQHighMid" else "enPEQ${eqBandSuffix(band)}Active"
++        val name = "enPEQ${eqBandSuffix(band)}Active"
+         return "/enPPCSwitchMessage/$GROUP/$name"
+     }
+     fun eqFreqAddress(band: EqBand) = "/enPPCRotaryMessage/$GROUP/enPEQFrequency${eqBandSuffix(band)}"
+@@ -687,13 +741,13 @@
+     fun mainOutCompStyleCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompStyle"
+     fun setMainOutCompStyleNext(index: Int): ByteArray = OscUtil.encode(mainOutCompStyleCycleAddress(), listOf(index, 1))
+ 
+-    fun mainOutCompFilterBandwidthAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidthCycle"
+-    fun mainOutCompFilterBandwidthCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidthCycle"
++    fun mainOutCompFilterBandwidthAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidth"
++    fun mainOutCompFilterBandwidthCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidth"
+     fun setMainOutCompFilterBandwidthNext(index: Int): ByteArray =
+         OscUtil.encode(mainOutCompFilterBandwidthCycleAddress(), listOf(index, 1))
+ 
+-    fun mainOutCompKneeAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimKneeCycle"
+-    fun mainOutCompKneeCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimKneeCycle"
++    fun mainOutCompKneeAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimKnee"
++    fun mainOutCompKneeCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimKnee"
+     fun setMainOutCompKneeNext(index: Int): ByteArray = OscUtil.encode(mainOutCompKneeCycleAddress(), listOf(index, 1))
+ 
+     // === Aux-шина - LINK (стерео-пара). ПОДТВЕРЖДЕНО реальным захватом
+@@ -702,12 +756,15 @@
+     fun setAuxBusPairingNext(index: Int): ByteArray = OscUtil.encode(auxBusPairingAddress(), listOf(index, 1))
+ 
+     // === Aux-шины - EQ (6 полос) и компрессор. Та же структура, что у Main
+-    // Outs, но с ДРУГИМИ именами параметров - сверено с датасетом отдельно,
+-    // не предполагалось по аналогии. Главное отличие: gain для EQ называется
+-    // enPEQQGainBand (двойное Q - так в самой прошивке, не опечатка).
++    // Outs. ИСПРАВЛЕНО: gain для EQ был enPEQQGainBand (с двойным Q) -
++    // считалось, что так в прошивке. Проверка показала обратное: строка "enPEQQGain"
++    // встречается в прошивке и Offline Editor РОВНО НОЛЬ раз, а пульт
++    // отвечал на подписку blob-ом нулевой длины ("параметра нет") на всех
++    // шести полосах. Двойное Q - опечатка в датасете muffeeee. Реальное
++    // имя такое же, как у Masters и MainOuts: enPEQGainBand1-6.
+     // НЕ подтверждено реальным захватом. ===
+     fun auxBusEqFreqAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQFrequencyBand${band + 1}"
+-    fun auxBusEqGainAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQQGainBand${band + 1}"
++    fun auxBusEqGainAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQGainBand${band + 1}"
+     fun auxBusEqWidthAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQWidthBand${band + 1}"
+     fun auxBusHpFreqAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enGEQHPFrequency"
+     fun auxBusLpFreqAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enGEQLPFrequency"
+@@ -804,4 +861,41 @@
+     // при каждом тапе. Глобальный параметр - индекса канала/группы нет. ===
+     fun globalTapAddress() = "/enPPCSwitchMessage/enGlobals/enGlobalTapSwitch"
+     fun setGlobalTap(): ByteArray = OscUtil.encode(globalTapAddress(), listOf(1))
++
++    // === Мьют-группы - структура полностью симметрична VCA-группам выше
++    // (см. подробную заметку у vcaChild*Address()), из того же датасета
++    // muffeeee, НЕ подтверждено собственным захватом. Число групп (8) -
++    // предположение по аналогии с 8 VCA-группами, см. заметку у
++    // ConnectionHolder.MUTE_GROUP_COUNT.
++    //
++    // ВАЖНО про enMuteGroupMute: датасет описывает его прямым текстом как
++    // "This toggles the mute groups to be muted or unmuted" - однозначно
++    // toggle-параметр (в отличие от спорного случая с mute одиночного
++    // канала, см. пункт 1 hardware_check_list.md). Шлём константу 1.
++    private const val MUTE_GROUP_GROUP = "enVirtualMuteGroups"
++    fun muteGroupMuteAddress() = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupMute"
++    fun muteGroupNameAddress() = "/enPPCStringMessage/$MUTE_GROUP_GROUP/enPathname"
++    fun muteGroupChildInputAddress(inputIndex: Int) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildInput${inputIndex + 1}"
++    fun muteGroupChildSubMixAddress(busIndex: Int) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildSubMix${busIndex + 1}"
++    fun muteGroupChildAuxReturnAddress(auxIndex: Int) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildAuxReturn${auxIndex + 1}"
++    fun muteGroupChildMainAddress(mainIndex: Int) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildMain${mainIndex + 1}"
++    fun muteGroupChildMasterAddress(letter: String) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildMaster$letter"
++
++    fun setMuteGroupMute(groupIndex: Int): ByteArray =
++        OscUtil.encode(muteGroupMuteAddress(), listOf(groupIndex, 1))
++
++    fun setMuteGroupChildInput(inputIndex: Int, groupIndex: Int, member: Boolean): ByteArray =
++        OscUtil.encode(muteGroupChildInputAddress(inputIndex), listOf(groupIndex, if (member) 1 else 0))
++
++    fun setMuteGroupChildSubMix(busIndex: Int, groupIndex: Int, member: Boolean): ByteArray =
++        OscUtil.encode(muteGroupChildSubMixAddress(busIndex), listOf(groupIndex, if (member) 1 else 0))
++
++    fun setMuteGroupChildAuxReturn(auxIndex: Int, groupIndex: Int, member: Boolean): ByteArray =
++        OscUtil.encode(muteGroupChildAuxReturnAddress(auxIndex), listOf(groupIndex, if (member) 1 else 0))
++
++    fun setMuteGroupChildMain(mainIndex: Int, groupIndex: Int, member: Boolean): ByteArray =
++        OscUtil.encode(muteGroupChildMainAddress(mainIndex), listOf(groupIndex, if (member) 1 else 0))
++
++    fun setMuteGroupChildMaster(letter: String, groupIndex: Int, member: Boolean): ByteArray =
++        OscUtil.encode(muteGroupChildMasterAddress(letter), listOf(groupIndex, if (member) 1 else 0))
+ }
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/OscUtil.kt	2026-08-12 12:14:50.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/OscUtil.kt	2026-08-28 06:43:32.097230307 +0000
+@@ -133,32 +133,48 @@
+                 OscElement.Bundle(timeTag, elements)
+             } else {
+                 var pos = offset
+-                val (address, afterAddress) = readOscString(bytes, pos)
++                val (address, afterAddress) = readOscString(bytes, pos, end)
+                 pos = afterAddress
+                 if (pos >= end || bytes[pos] != ','.code.toByte()) {
+                     return OscElement.Message(address, null, emptyList())
+                 }
+-                val (typeTag, afterTag) = readOscString(bytes, pos)
++                val (typeTag, afterTag) = readOscString(bytes, pos, end)
+                 pos = afterTag
+                 val args = mutableListOf<Any>()
+                 for (tag in typeTag.drop(1)) {
+                     when (tag) {
+                         'i' -> {
++                            // Проверка границы: тайп-таг приходит от пульта и
++                            // может не соответствовать реальному объёму данных
++                            // в элементе. Без проверки читали бы байты соседнего
++                            // элемента бандла как значение.
++                            if (pos + 4 > end) return OscElement.Message(address, typeTag, args)
+                             args.add(ByteBuffer.wrap(bytes, pos, 4).int)
+                             pos += 4
+                         }
+                         'f' -> {
++                            if (pos + 4 > end) return OscElement.Message(address, typeTag, args)
+                             args.add(ByteBuffer.wrap(bytes, pos, 4).float)
+                             pos += 4
+                         }
+                         's' -> {
+-                            val (s, newOffset) = readOscString(bytes, pos)
++                            val (s, newOffset) = readOscString(bytes, pos, end)
+                             args.add(s)
+                             pos = newOffset
+                         }
+                         'b' -> {
++                            if (pos + 4 > end) return OscElement.Message(address, typeTag, args)
+                             val blobLen = ByteBuffer.wrap(bytes, pos, 4).int
+                             pos += 4
++                            // Длина блоба приходит по сети. Отрицательная или
++                            // выходящая за элемент длина раньше приводила к
++                            // исключению в copyOfRange, а значит - к молчаливой
++                            // потере ВСЕГО пакета (весь decodeElement возвращал
++                            // null). Теперь просто останавливаем разбор
++                            // аргументов, сохранив то, что уже успели прочитать.
++                            if (blobLen < 0 || pos + blobLen > end) {
++                                return OscElement.Message(address, typeTag, args)
++                            }
+                             val blob = bytes.copyOfRange(pos, pos + blobLen)
+                             args.add(blob)
+                             pos += blobLen + padLen(blobLen)
+@@ -193,9 +209,20 @@
+         return if (padLen == 0) bytes else bytes + ByteArray(padLen)
+     }
+ 
+-    private fun readOscString(bytes: ByteArray, offset: Int): Pair<String, Int> {
++    /**
++     * @param limit граница, за которую нельзя заходить при поиске
++     *        нуль-терминатора. По умолчанию - конец массива.
++     *
++     * ИСПРАВЛЕНИЕ: раньше поиск нуля шёл без верхней границы вообще.
++     * Внутри бандла это позволяло "перепрыгнуть" конец текущего элемента и
++     * начать читать байты СЛЕДУЮЩЕГО элемента как продолжение строки, а на
++     * пакете без нуль-терминатора - выйти за пределы массива (исключение
++     * ловилось выше, но при этом молча терялся весь пакет целиком).
++     */
++    private fun readOscString(bytes: ByteArray, offset: Int, limit: Int = bytes.size): Pair<String, Int> {
+         var end = offset
+-        while (bytes[end] != 0.toByte()) end++
++        while (end < limit && bytes[end] != 0.toByte()) end++
++        if (end >= limit) throw IllegalArgumentException("OSC string not terminated within bounds")
+         val s = String(bytes, offset, end - offset, Charsets.US_ASCII)
+         val totalWithNull = end - offset + 1
+         val rem = totalWithNull % 4
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/Models.kt	2026-08-23 19:37:04.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/Models.kt	2026-08-31 11:02:36.009331686 +0000
+@@ -8,7 +8,7 @@
+ enum class ParamKind { FADER, MUTE, SOLO, SOLO_B, LINK, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, COMP_DET_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, EQ_SHAPE_BASS, EQ_SHAPE_TREBLE, PAN, PHANTOM, PHASE, GAIN_TRIM, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER, GATE_DET_METER, COMP_MODE, GATE_MODE, COMP_PRESENCE, BUS_TRIM, COMP_STYLE, COMP_FILTER_BANDWIDTH, COMP_KNEE, CHANNEL_SOURCE }
+ // Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX ШИНЫ, MASTER - мастер намеренно
+ // в конце (по просьбе - обычно с ним работают реже всего).
+-enum class StripMode { CHANNELS, AUX_RETURNS, AUX_BUS, VCA, MASTER, MAIN_OUTS }
++enum class StripMode { CHANNELS, AUX_RETURNS, AUX_BUS, VCA, MUTE_GROUPS, MASTER, MAIN_OUTS }
+ data class Subscription(val channel: Int, val kind: ParamKind, val auxBus: Int = 0, val eqBand: Int = 0)
+ 
+ /** Последние известные значения одного канала - переживают поворот экрана (см. ConnectionHolder). */
+@@ -174,6 +174,27 @@
+ /** Подписка на членство одного "ребёнка" (канал/шина/aux return/main/master) в конкретной VCA-группе. */
+ data class VcaMemberSub(val childType: String, val childIndex: Int, val vcaIndex: Int)
+ 
++/**
++ * Мьют-группа. Структура полностью симметрична VcaData - взята из того же
++ * стороннего датасета (muffeeee), не из собственного захвата трафика.
++ * enMuteGroupMute датасет описывает прямым текстом как "toggles the mute
++ * groups to be muted or unmuted" - то есть однозначно toggle-параметр,
++ * шлём константу 1 (в отличие от неоднозначного случая с mute каналов,
++ * см. пункт 1 hardware_check_list.md).
++ */
++data class MuteGroupData(
++    var name: String = "",
++    var mutedLocal: Boolean = false,
++    val memberInput: BooleanArray = BooleanArray(56),
++    val memberSubMix: BooleanArray = BooleanArray(16),
++    val memberAuxReturn: BooleanArray = BooleanArray(8),
++    val memberMain: BooleanArray = BooleanArray(8),
++    val memberMaster: BooleanArray = BooleanArray(3)
++)
++
++/** Подписка на членство одного "ребёнка" в конкретной мьют-группе. */
++data class MuteGroupMemberSub(val childType: String, val childIndex: Int, val groupIndex: Int)
++
+ data class MainOutData(
+     var fader: Float = 0f,
+     var mutedLocal: Boolean = false,
+--- extracted/MidasFaderTest/app/src/main/res/layout/channel_detail.xml	2026-08-23 19:36:51.000000000 +0000
++++ work/app/src/main/res/layout/channel_detail.xml	2026-08-30 16:52:03.484472952 +0000
+@@ -306,11 +306,12 @@
+                     android:textColor="#ffffff"
+                     android:backgroundTint="#3a3a3c" />
+ 
+-                <!-- Патчинг (какой физический вход подключён) - ТОЛЬКО
+-                     ЧТЕНИЕ, сырое число. Кодировка не расшифрована - см.
+-                     заметку у Pro2Commands.channelSourceAddress(). Пока
+-                     полезно только чтобы собрать данные: смотреть, как
+-                     меняется число при ручном патчинге на самом пульте. -->
++                <!-- Патчинг (какой физический вход подключён к каналу).
++                     Кодировка расшифрована (уровень A), запись подтверждена
++                     реальным трафиком (4 записи, каждая с эхом от пульта) -
++                     см. подробности у Pro2Commands.channelSourceAddress().
++                     Спрятан за диалогом с двойным подтверждением: смена
++                     патча меняет реальную маршрутизацию звука на пульте. -->
+                 <TextView
+                     android:id="@+id/textDetailChannelSource"
+                     android:layout_width="match_parent"
+@@ -322,6 +323,17 @@
+                     android:gravity="center"
+                     android:layout_marginTop="8dp" />
+ 
++                <Button
++                    android:id="@+id/btnDetailPatch"
++                    android:layout_width="match_parent"
++                    android:layout_height="wrap_content"
++                    android:layout_marginTop="6dp"
++                    android:text="ПАТЧИНГ"
++                    android:textSize="12sp"
++                    android:textStyle="bold"
++                    android:textColor="#ffffff"
++                    android:backgroundTint="#3a3a3c" />
++
+                 <!-- Панорама - ПОДТВЕРЖДЕНО реальным захватом. -->
+                 <TextView
+                     android:layout_width="wrap_content"
+--- new files (no prior version to diff) ---
+app/src/main/res/layout/activity_mute_group_members.xml (new)

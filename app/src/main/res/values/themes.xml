@@ -1,9 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
-    <style name="Base.Theme.MidasFader" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your light theme here. -->
-        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+
+    <!--
+        ТЕМА ПРИЛОЖЕНИЯ.
+
+        Раньше в манифесте стояла стандартная Theme.AppCompat.DayNight.
+        В светлом системном режиме её фон окна был БЕЛЫМ, и после того как
+        мы добавили отступы под системные панели, этот белый фон стал
+        виден полосами по краям экрана - там, где содержимое отодвинуто
+        от статус-бара, панели навигации и выреза камеры.
+
+        Приложение всегда тёмное (это пульт, светлого режима у него нет),
+        поэтому фиксируем тёмную тему и явно задаём чёрный фон окна.
+    -->
+    <style name="Theme.Midas" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/console_bg</item>
+        <item name="android:colorBackground">@color/console_bg</item>
+
+        <!-- Системные панели: прозрачные, содержимое рисуется под ними,
+             а безопасные отступы расставляет SystemInsets.kt. -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+
+        <!-- Значки системных панелей светлые - иначе на чёрном фоне
+             часы и индикаторы были бы не видны. -->
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
+
+        <!-- Разрешаем занимать область выреза камеры: иначе рядом с ним
+             остаётся чёрная (а на светлой теме - белая) полоса. -->
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="27">shortEdges</item>
+
+        <item name="colorPrimary">@color/console_accent</item>
+        <item name="colorAccent">@color/console_accent</item>
     </style>
 
-    <style name="Theme.MidasFader" parent="Base.Theme.MidasFader" />
+    <!-- Старое имя оставлено, чтобы ничего не сломать, если где-то ещё
+         используется; ведёт на ту же тему. -->
+    <style name="Theme.MidasFader" parent="Theme.Midas" />
 </resources>

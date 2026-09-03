@@ -44,6 +44,7 @@ class RoleSelectActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_role_select)
+        findViewById<android.view.View>(android.R.id.content).applySystemBarInsets()
         supportActionBar?.hide()
         applyBlackSystemBars()
 
@@ -82,15 +83,10 @@ class RoleSelectActivity : AppCompatActivity() {
             handles.addAll(ConnectionHolder.mainOutSubscriptions.keys)
             handles.addAll(ConnectionHolder.vcaMemberSubscriptions.keys)
             CoroutineScope(Dispatchers.IO).launch {
-                for (handle in handles) {
-                    try {
-                        val packet = Pro2Commands.unsubscribe(handle)
-                        val dp = java.net.DatagramPacket(packet, packet.size, addr, prt)
-                        s.send(dp)
-                    } catch (e: Exception) {
-                        break
-                    }
-                }
+                // Общая аккуратная отписка - см. unsubscribeHandles().
+                // Сокет закрываем только ПОСЛЕ неё: иначе пульт остался бы
+                // с живыми подписками на несуществующего клиента.
+                unsubscribeHandles(s, addr, prt, handles)
                 s.close()
             }
         } else {

@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        ЕДИНЫЙ СТИЛЬ ЭЛЕМЕНТОВ УПРАВЛЕНИЯ.
+
+        До этого каждая кнопка задавала размер шрифта, отступы и цвета у
+        себя в разметке, и они разъехались: на одном экране рядом стояли
+        "HP FILTER OFF" крупным шрифтом и "HP SLOPE" мелким, часть кнопок
+        со скруглением, часть без. Теперь общий вид задан здесь в одном
+        месте - поменять внешний вид всех кнопок сразу можно правкой
+        одного стиля.
+
+        Именование: Widget.Midas.<роль>.
+    -->
+
+    <!-- Базовая кнопка: тёмная, компактная, без ALL CAPS-трансформации
+         (иначе русские подписи выглядят рвано). -->
+    <style name="Widget.Midas.Button" parent="android:Widget.Material.Button">
+        <item name="android:background">@drawable/console_button_background</item>
+        <item name="android:backgroundTint">@color/console_button_idle</item>
+        <item name="android:textColor">@color/console_text_primary</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:minHeight">0dp</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:paddingTop">10dp</item>
+        <item name="android:paddingBottom">10dp</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
+        <item name="android:stateListAnimator">@null</item>
+    </style>
+
+    <!-- Мелкая кнопка для плотных рядов (слоупы, PRE/POST, ON/OFF). -->
+    <style name="Widget.Midas.Button.Small">
+        <item name="android:textSize">10sp</item>
+        <item name="android:paddingTop">6dp</item>
+        <item name="android:paddingBottom">6dp</item>
+        <item name="android:paddingStart">6dp</item>
+        <item name="android:paddingEnd">6dp</item>
+    </style>
+
+    <!-- Кнопка вкладки в шапке детального экрана. -->
+    <style name="Widget.Midas.Button.Tab">
+        <item name="android:background">@android:color/transparent</item>
+        <item name="android:backgroundTint">@null</item>
+        <item name="android:textColor">@color/console_text_secondary</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">16dp</item>
+        <item name="android:paddingTop">12dp</item>
+        <item name="android:paddingBottom">12dp</item>
+    </style>
+
+    <!-- Подпись параметра над ручкой/ползунком.
+         ВАЖНО: parent указан ЯВНО. Точка в имени стиля в Android означает
+         неявное наследование ("TextAppearance.Midas.ParamLabel" ищет
+         родителя "TextAppearance.Midas"), а такого стиля у нас нет - из-за
+         этого сборка падала с "resource style/TextAppearance.Midas not
+         found". Явный parent отключает поиск по имени. -->
+    <style name="TextAppearance.Midas.ParamLabel" parent="android:TextAppearance">
+        <item name="android:textColor">@color/console_accent</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.04</item>
+    </style>
+
+    <!-- Числовое значение под ручкой/ползунком. -->
+    <style name="TextAppearance.Midas.ParamValue" parent="android:TextAppearance">
+        <item name="android:textColor">@color/console_text_secondary</item>
+        <item name="android:textSize">11sp</item>
+    </style>
+</resources>

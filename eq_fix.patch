@@ -1,0 +1,28 @@
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/EqCurveView.kt	2026-08-20 16:53:23.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/EqCurveView.kt	2026-08-31 12:32:45.388423562 +0000
+@@ -39,9 +39,13 @@
+         private val bandHzRangeStatic = mapOf(
+             BandId.BASS to (16f to 400f),
+             BandId.LOW_MID to (80f to 2000f),
+-            // Уточнено по новому фото экрана пульта (hi mid): было 350,
+-            // на шкале реально 320.
+-            BandId.MID_HIGH to (320f to 8000f),
++            // ИСПРАВЛЕНО ОБРАТНО на 350: было исправлено на 320 по нечёткому
++            // фото экрана (см. историю ниже), но свежая запись "Настройки
++            // канала" (канал 33, все 4 полосы задокументированы системно и
++            // явно: bass 16-400, lo-mid 80-2000, hi-mid 350-8000, treble
++            // 1000-25000) прямо говорит 350. Систематическая запись всех
++            // четырёх диапазонов сразу надёжнее одиночной правки по фото.
++            BandId.MID_HIGH to (350f to 8000f),
+             BandId.TREBLE to (1000f to 25000f)
+         )
+ 
+@@ -96,7 +100,7 @@
+     private val bandHzRange = mapOf(
+         BandId.BASS to (16f to 400f),
+         BandId.LOW_MID to (80f to 2000f),
+-        BandId.MID_HIGH to (320f to 8000f),
++        BandId.MID_HIGH to (350f to 8000f),
+         BandId.TREBLE to (1000f to 25000f)
+     )
+     private val bandOrder = listOf(BandId.BASS, BandId.LOW_MID, BandId.MID_HIGH, BandId.TREBLE)

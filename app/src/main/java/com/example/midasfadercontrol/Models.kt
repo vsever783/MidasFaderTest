@@ -5,10 +5,10 @@ package com.example.midasfadercontrol
 // Перечисления и модели данных, используемые по всему приложению.
 
 // === Живая подписка на пульт (см. Pro2Commands.batchSubscribe) ===
-enum class ParamKind { FADER, MUTE, SOLO, SOLO_B, LINK, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, COMP_DET_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, EQ_SHAPE_BASS, EQ_SHAPE_TREBLE, PAN, PHANTOM, PHASE, GAIN_TRIM, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER, GATE_DET_METER, COMP_MODE, GATE_MODE, COMP_PRESENCE, BUS_TRIM, COMP_STYLE, COMP_FILTER_BANDWIDTH, COMP_KNEE, CHANNEL_SOURCE }
+enum class ParamKind { FADER, MUTE, SOLO, SOLO_B, LINK, GAIN, NAME, COLOUR, METER, COMP_RATIO, COMP_ATTACK, COMP_RELEASE, COMP_THRESHOLD, COMP_MAKEUP, COMP_IN, COMP_FILTERS_IN, COMP_FILTER_FREQ, COMP_GR_METER, COMP_DET_METER, AUX_SEND, AUX_SEND_ENABLE, AUX_SEND_PREFADE, MATRIX_SEND, MATRIX_SEND_ENABLE, MATRIX_SEND_PREFADE, EQ_IN, EQ_BAND_ACTIVE, EQ_FREQ, EQ_GAIN, EQ_WIDTH, EQ_SHAPE_BASS, EQ_SHAPE_TREBLE, PAN, PHANTOM, PHASE, GAIN_TRIM, HP_FILTER_IN, HP_FILTER_FREQ, LP_FILTER_IN, LP_FILTER_FREQ, INPUT_DELAY, GATE_IN, GATE_THRESHOLD, GATE_RANGE, GATE_ATTACK, GATE_HOLD, GATE_RELEASE, GATE_TRANSIENT, GATE_FILTER_FREQ, GATE_FILTERS_IN, GATE_GR_METER, GATE_DET_METER, COMP_MODE, GATE_MODE, COMP_PRESENCE, BUS_TRIM, COMP_STYLE, COMP_FILTER_BANDWIDTH, COMP_KNEE, CHANNEL_SOURCE }
 // Порядок вкладок: КАНАЛЫ, AUX RETURNS, AUX ШИНЫ, MASTER - мастер намеренно
 // в конце (по просьбе - обычно с ним работают реже всего).
-enum class StripMode { CHANNELS, AUX_RETURNS, AUX_BUS, VCA, MASTER, MAIN_OUTS }
+enum class StripMode { CHANNELS, AUX_RETURNS, AUX_BUS, VCA, MUTE_GROUPS, MASTER, MAIN_OUTS }
 data class Subscription(val channel: Int, val kind: ParamKind, val auxBus: Int = 0, val eqBand: Int = 0)
 
 /** Последние известные значения одного канала - переживают поворот экрана (см. ConnectionHolder). */
@@ -33,6 +33,9 @@ data class ChannelData(
     // Посылы на 16 aux-шин (индекс 0 = aux 1, ... индекс 15 = aux 16).
     // НЕ подтверждено реальным захватом - см. заметку в Pro2Commands.
     val auxSends: FloatArray = FloatArray(16),
+    // Посылы в 8 матричных шин (enMainSendLevel1-8). Отдельно от
+    // auxSends: это разные шины и разные параметры.
+    val matrixSends: FloatArray = FloatArray(8),
     // EQ (4 полосы: 0=bass, 1=low-mid, 2=mid-high, 3=treble) - подтверждено
     // описаниями в списке команд, но НЕ реальным захватом.
     var eqInLocal: Boolean = false,
@@ -83,7 +86,9 @@ data class ChannelData(
     var inputDelay: Float = 0f,
     // Отдельно от уровня посыла - вкл/выкл и pre/post для каждой из 16 шин.
     val auxSendEnable: BooleanArray = BooleanArray(16) { true },
-    val auxSendPreFade: BooleanArray = BooleanArray(16)
+    val auxSendPreFade: BooleanArray = BooleanArray(16),
+    val matrixSendEnable: BooleanArray = BooleanArray(8) { true },
+    val matrixSendPreFade: BooleanArray = BooleanArray(8)
 )
 
 /** Состояние одного мастер-канала - НЕ подтверждено реальным захватом. */
@@ -173,6 +178,27 @@ data class VcaData(
 
 /** Подписка на членство одного "ребёнка" (канал/шина/aux return/main/master) в конкретной VCA-группе. */
 data class VcaMemberSub(val childType: String, val childIndex: Int, val vcaIndex: Int)
+
+/**
+ * Мьют-группа. Структура полностью симметрична VcaData - взята из того же
+ * стороннего датасета (muffeeee), не из собственного захвата трафика.
+ * enMuteGroupMute датасет описывает прямым текстом как "toggles the mute
+ * groups to be muted or unmuted" - то есть однозначно toggle-параметр,
+ * шлём константу 1 (в отличие от неоднозначного случая с mute каналов,
+ * см. пункт 1 hardware_check_list.md).
+ */
+data class MuteGroupData(
+    var name: String = "",
+    var mutedLocal: Boolean = false,
+    val memberInput: BooleanArray = BooleanArray(56),
+    val memberSubMix: BooleanArray = BooleanArray(16),
+    val memberAuxReturn: BooleanArray = BooleanArray(8),
+    val memberMain: BooleanArray = BooleanArray(8),
+    val memberMaster: BooleanArray = BooleanArray(3)
+)
+
+/** Подписка на членство одного "ребёнка" в конкретной мьют-группе. */
+data class MuteGroupMemberSub(val childType: String, val childIndex: Int, val groupIndex: Int)
 
 data class MainOutData(
     var fader: Float = 0f,

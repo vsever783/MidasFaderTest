@@ -2,7 +2,6 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fitsSystemWindows="true"
     android:orientation="vertical"
     android:background="#000000">
 
@@ -15,6 +14,7 @@
         android:gravity="center_vertical">
 
         <Button
+            style="@style/Widget.Midas.Button"
             android:id="@+id/btnMonitorBack"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -67,6 +67,7 @@
             android:progress="0" />
 
         <Button
+            style="@style/Widget.Midas.Button"
             android:id="@+id/btnMonitorBusMute"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"

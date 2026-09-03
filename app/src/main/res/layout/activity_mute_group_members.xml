@@ -15,7 +15,7 @@
 
         <Button
             style="@style/Widget.Midas.Button"
-            android:id="@+id/btnVcaMembersBack"
+            android:id="@+id/btnMuteGroupMembersBack"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:minHeight="0dp"
@@ -24,12 +24,12 @@
             android:backgroundTint="#3a3a3c" />
 
         <TextView
-            android:id="@+id/textVcaMembersTitle"
+            android:id="@+id/textMuteGroupMembersTitle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginStart="16dp"
-            android:text="VCA 1 MEMBERS"
+            android:text="MUTE GROUP 1 MEMBERS"
             android:textColor="#ff9f0a"
             android:textStyle="bold"
             android:textSize="18sp" />
@@ -52,7 +52,7 @@
         android:layout_weight="1">
 
         <LinearLayout
-            android:id="@+id/containerVcaMembers"
+            android:id="@+id/containerMuteGroupMembers"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"

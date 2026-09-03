@@ -1,0 +1,1244 @@
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/MainActivity.kt	2026-08-24 12:12:15.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/MainActivity.kt	2026-08-31 16:22:29.770901913 +0000
+@@ -174,8 +174,9 @@
+             return
+         }
+         val port = consolePort
+-        textConnectionStatus.text = "● Connected"
+-        textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
++        // Зелёный ставит только сторожевой таймер, по факту приёма данных.
++        textConnectionStatus.text = "● Подключение..."
++        textConnectionStatus.setTextColor(Color.parseColor("#ff9f0a"))
+         textStatus.text = "Subscribing to live updates..."
+         collapseConnectForm()
+ 
+@@ -186,9 +187,13 @@
+             } else {
+                 requestInitialState(existingSocket, existingAddress, port)
+             }
+-            subscribedAlready = true
+             if (sessionToken == null) sessionToken = 0
+-            if (appMode != MODE_MONITOR) {
++            // Замок: subscribeAll() выполнит только первый вызывающий.
++            // Замок берём в ОБОИХ режимах - subscribedAlready используется
++            // ещё и для распознавания поворота экрана, и раньше он
++            // выставлялся здесь безусловно.
++            val firstClaim = ConnectionHolder.claimSubscribeAll()
++            if (firstClaim && appMode != MODE_MONITOR) {
+                 subscribeAll()
+             }
+             startPollLoop(existingSocket, existingAddress, port)
+@@ -209,6 +214,7 @@
+         buildAuxStrips()
+         buildAuxBusStrips()
+         buildVcaStrips()
++        buildMuteGroupStrips()
+         buildMainOutStrips()
+         buildModeButtons()
+         setupGlobalTapButton()
+@@ -228,8 +234,8 @@
+             if (subscribedAlready) {
+                 receiveJob?.cancel()
+                 pollJob?.cancel()
+-                textConnectionStatus.text = "● Connected"
+-                textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
++                textConnectionStatus.text = "● Подключение..."
++                textConnectionStatus.setTextColor(Color.parseColor("#ff9f0a"))
+                 textStatus.text = "Connection restored after screen rotation"
+                 collapseConnectForm()
+                 restoreUiFromChannelData()
+@@ -261,6 +267,8 @@
+     // обновления кнопок push-ответами) и сами кнопки по ключу "тип:индекс".
+     private var openVcaMembersIndex: Int? = null
+     private val vcaMemberButtons = mutableMapOf<String, Button>()
++    private var openMuteGroupMembersIndex: Int? = null
++    private val muteGroupMemberButtons = mutableMapOf<String, Button>()
+     // Открытый экран "MAIN N DETAIL" (EQ/компрессор) - для live-обновления
+     // ползунков при входящих push, пока экран виден.
+     // Экран деталей aux-шины/Main Out (общий, group_detail.xml) - какая
+@@ -290,8 +298,8 @@
+         // восстанавливаем), false значит свежий вход в мониторный режим
+         // на уже живом соединении - нужно подписаться впервые.
+         if (socket != null && consoleAddress != null) {
+-            textConnectionStatus.text = "● Connected"
+-            textConnectionStatus.setTextColor(Color.parseColor("#34c759"))
++            textConnectionStatus.text = "● Подключение..."
++            textConnectionStatus.setTextColor(Color.parseColor("#ff9f0a"))
+             if (subscribedAlready) {
+                 buildMonitorBusList()
+                 if (ConnectionHolder.uiMonitorSelectedBus >= 0) {
+@@ -687,6 +695,7 @@
+     private val auxStrips = mutableListOf<SimpleStripUi>()
+     private val auxBusStrips = mutableListOf<SimpleStripUi>()
+     private val vcaStrips = mutableListOf<SimpleStripUi>()
++    private val muteGroupStrips = mutableListOf<SimpleStripUi>()
+     private val mainOutStrips = mutableListOf<SimpleStripUi>()
+ 
+     /**
+@@ -705,7 +714,9 @@
+         onMute: (Boolean) -> Unit,
+         onSolo: (Boolean) -> Unit,
+         onSoloB: (Boolean) -> Unit,
+-        showSoloB: Boolean = false // Убрано по просьбе пользователя
++        showSoloB: Boolean = false, // Убрано по просьбе пользователя
++        showFader: Boolean = true,
++        showSolo: Boolean = true
+     ): SimpleStripUi {
+         val inflater = LayoutInflater.from(this)
+         val strip = inflater.inflate(R.layout.channel_strip, container, false)
+@@ -731,6 +742,13 @@
+         muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
+         soloButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#3a3a3c"))
+ 
++        // У мьют-группы на пульте нет ни фейдера, ни solo - это просто
++        // кнопка MUTE. Прячем лишние виджеты вместо создания отдельного
++        // XML-layout под один частный случай.
++        fader.visibility = if (showFader) android.view.View.VISIBLE else android.view.View.GONE
++        levelText.visibility = if (showFader) android.view.View.VISIBLE else android.view.View.GONE
++        soloButton.visibility = if (showSolo) android.view.View.VISIBLE else android.view.View.GONE
++
+         // Вторая шина solo - ПОДТВЕРЖДЕНО реальным захватом. Только для
+         // мастера/aux returns/aux-шин (у обычных 56 каналов остаётся
+         // скрытой - там Solo B в детальном экране).
+@@ -875,6 +893,42 @@
+     }
+ 
+     /**
++     * Мьют-группы (8 шт.) - точная копия buildVcaStrips() выше. Структура
++     * ещё не подтверждена собственным захватом трафика (взята из датасета
++     * muffeeee, см. подробную заметку у Pro2Commands.muteGroupMuteAddress()),
++     * поэтому: (1) нет фейдера и solo - у мьют-группы на пульте это просто
++     * кнопка MUTE, без уровня и соло; (2) в заголовке полосы предупреждение,
++     * снимается после первой проверки на реальном пульте.
++     */
++    private fun buildMuteGroupStrips() {
++        val container = findViewById<android.widget.LinearLayout>(R.id.containerMuteGroups)
++        container.removeAllViews()
++        muteGroupStrips.clear()
++        for (g in 0 until ConnectionHolder.MUTE_GROUP_COUNT) {
++            val data = ConnectionHolder.muteGroupData[g]
++            val ui = buildSimpleStrip(
++                container, "MUTE ${g + 1}", initialFader = 0f, initialMuted = data.mutedLocal, initialSoloB = false,
++                onFader = { /* у мьют-группы нет фейдера - не вызывается, ползунок скрыт */ },
++                onMute = { muted ->
++                    ConnectionHolder.muteGroupData[g].mutedLocal = muted
++                    // enMuteGroupMute - подтверждённый датасетом toggle:
++                    // "This toggles the mute groups to be muted or unmuted" -
++                    // шлём константу 1 независимо от целевого состояния,
++                    // пульт сам переключает (см. setMuteGroupMute()).
++                    sendRawAsync(Pro2Commands.setMuteGroupMute(g))
++                },
++                onSolo = { /* у мьют-группы нет solo */ },
++                onSoloB = { },
++                showSoloB = false,
++                showFader = false,
++                showSolo = false
++            )
++            muteGroupStrips.add(ui)
++            ui.headerView.setOnClickListener { openMuteGroupMembers(g) }
++        }
++    }
++
++    /**
+      * Main Outs (8 позиций, "matrix out" на самом пульте). Базовая полоса
+      * (фейдер/mute/solo/имя/цвет) - см. подробную заметку у
+      * Pro2Commands.mainOut*Address(). EQ/компрессор Main Outs пока не
+@@ -971,13 +1025,15 @@
+         val btnMainOuts = makeTab("MATRIX", StripMode.MAIN_OUTS)
+         val btnMaster = makeTab("MASTER", StripMode.MASTER)
+         val btnVca = makeTab("VCA", StripMode.VCA)
++        val btnMuteGroups = makeTab("MUTE", StripMode.MUTE_GROUPS)
+         modeButtons = mapOf(
+             StripMode.CHANNELS to btnChannels,
+             StripMode.AUX_BUS to btnAuxBus,
+             StripMode.AUX_RETURNS to btnAux,
+             StripMode.MAIN_OUTS to btnMainOuts,
+             StripMode.MASTER to btnMaster,
+-            StripMode.VCA to btnVca
++            StripMode.VCA to btnVca,
++            StripMode.MUTE_GROUPS to btnMuteGroups
+         )
+ 
+         switchStripMode(ConnectionHolder.uiStripMode)
+@@ -1008,6 +1064,8 @@
+             if (mode == StripMode.AUX_BUS) android.view.View.VISIBLE else android.view.View.GONE
+         findViewById<android.view.View>(R.id.containerVca).visibility =
+             if (mode == StripMode.VCA) android.view.View.VISIBLE else android.view.View.GONE
++        findViewById<android.view.View>(R.id.containerMuteGroups).visibility =
++            if (mode == StripMode.MUTE_GROUPS) android.view.View.VISIBLE else android.view.View.GONE
+         findViewById<android.view.View>(R.id.containerMaster).visibility =
+             if (mode == StripMode.MASTER) android.view.View.VISIBLE else android.view.View.GONE
+         findViewById<android.view.View>(R.id.containerMainOuts).visibility =
+@@ -1398,8 +1456,11 @@
+                 if (blob.size >= 4) {
+                     val raw = ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+                     ConnectionHolder.channelData[sub.channel].channelSource = raw
++                    if (ConnectionHolder.patchBaseline[sub.channel] == null) {
++                        ConnectionHolder.patchBaseline[sub.channel] = raw
++                    }
+                     if (openDetailChannel == sub.channel) {
+-                        detailChannelSourceText?.text = "SOURCE: $raw"
++                        detailChannelSourceText?.text = sourceLabel(raw)
+                     }
+                 }
+             }
+@@ -1640,6 +1701,31 @@
+             else -> {}
+         }
+     }
++    /**
++     * Базовое состояние мьют-группы (только MUTE и имя - у мьют-группы на
++     * пульте нет ни фейдера, ни solo, ни цвета). Точная копия
++     * соответствующих веток handleVcaSubscribedValue.
++     */
++    internal fun handleMuteGroupSubscribedValue(sub: Subscription, blob: ByteArray) {
++        when (sub.kind) {
++            ParamKind.MUTE -> {
++                val muted = blob.size >= 4 &&
++                    ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
++                ConnectionHolder.muteGroupData[sub.channel].mutedLocal = muted
++                val ui = muteGroupStrips.getOrNull(sub.channel) ?: return
++                ui.mutedLocal = muted
++                ui.muteButton.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (muted) "#ff3b30" else "#3a3a3c"))
++            }
++            ParamKind.NAME -> {
++                val name = String(blob, Charsets.US_ASCII).trimEnd('\u0000')
++                if (name.isBlank()) return
++                ConnectionHolder.muteGroupData.getOrNull(sub.channel)?.name = name
++                muteGroupStrips.getOrNull(sub.channel)?.labelView?.text = name
++            }
++            else -> { /* у мьют-группы других полей нет */ }
++        }
++    }
++
+     internal fun handleVcaSubscribedValue(sub: Subscription, blob: ByteArray) {
+         when (sub.kind) {
+             ParamKind.FADER -> {
+@@ -1716,6 +1802,28 @@
+     }
+ 
+     /**
++     * Push-обновление членства одного "ребёнка" в мьют-группе. Точная
++     * копия handleVcaMemberSubscribedValue() выше.
++     */
++    internal fun handleMuteGroupMemberSubscribedValue(sub: MuteGroupMemberSub, blob: ByteArray) {
++        val member = blob.size >= 4 &&
++            ByteBuffer.wrap(blob).order(java.nio.ByteOrder.LITTLE_ENDIAN).int != 0
++        val g = ConnectionHolder.muteGroupData.getOrNull(sub.groupIndex) ?: return
++        when (sub.childType) {
++            "input" -> g.memberInput.getOrNull(sub.childIndex)?.let { g.memberInput[sub.childIndex] = member }
++            "submix" -> g.memberSubMix.getOrNull(sub.childIndex)?.let { g.memberSubMix[sub.childIndex] = member }
++            "auxreturn" -> g.memberAuxReturn.getOrNull(sub.childIndex)?.let { g.memberAuxReturn[sub.childIndex] = member }
++            "main" -> g.memberMain.getOrNull(sub.childIndex)?.let { g.memberMain[sub.childIndex] = member }
++            "master" -> g.memberMaster.getOrNull(sub.childIndex)?.let { g.memberMaster[sub.childIndex] = member }
++        }
++        if (openMuteGroupMembersIndex == sub.groupIndex) {
++            val btn = muteGroupMemberButtons["${sub.childType}:${sub.childIndex}"] ?: return
++            btn.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (member) "#ff9f0a" else "#3a3a3c"))
++            btn.setTextColor(Color.parseColor(if (member) "#000000" else "#ffffff"))
++        }
++    }
++
++    /**
+      * Main Outs (8 позиций) - базовая полоса. См. заметку в
+      * Pro2Commands.kt у mainOut*Address() про степень подтверждённости.
+      */
+@@ -1987,6 +2095,125 @@
+     private var detailPhaseButton: Button? = null
+     private var detailLinkButton: Button? = null
+     private var detailChannelSourceText: TextView? = null
++
++    // ===== ПАТЧИНГ ВХОДА (тестовая реализация) =====================
++    //
++    // Кодировка uSource подтверждена уровнем A (12 точек живого трафика по
++    // DL251 + 3 по локальным входам). Сторона ЗАПИСИ в захватах не
++    // наблюдалась ни разу, но enChannelColour - параметр того же типа
++    // (enPPCIntegerMessage) в той же группе, и его запись тегами ",ii"
++    // давно работает на реальном пульте. Поэтому пишем так же и начинаем
++    // с безопасного no-op.
++
++    /** Подпись источника: расшифровка, если форма известна, иначе сырое число. */
++    private fun sourceLabel(raw: Int): String {
++        if (raw == -1) return "SOURCE: —"
++        val human = Pro2Commands.describeSource(raw)
++        return if (human != null) "SOURCE: $human" else "SOURCE: 0x%08x (не распознан)".format(raw)
++    }
++
++    private fun showPatchDialog(channel: Int) {
++        val current = ConnectionHolder.channelData[channel].channelSource
++        val baseline = ConnectionHolder.patchBaseline[channel]
++        val currentLabel = if (current != -1) sourceLabel(current) else "SOURCE: —"
++
++        // Двухшаговый выбор вместо одного списка на 58 пунктов (48 DL251 +
++        // 8 локальных + служебные). Плоский список неудобен для живой
++        // работы за пультом - инженеру пришлось бы скроллить посреди
++        // выступления. Сначала категория, потом номер колесом (NumberPicker).
++        val labels = mutableListOf<String>()
++        val actions = mutableListOf<() -> Unit>()
++
++        labels.add("DL251 (выбрать канал 1–48)")
++        actions.add {
++            showNumberPickerDialog(1, 48, "DL251 — физический канал") { ch ->
++                confirmAndSend(channel, Pro2Commands.dl251Source(ch), "DL251 ch $ch")
++            }
++        }
++        labels.add("Локальный вход (выбрать 1–8)")
++        actions.add {
++            showNumberPickerDialog(1, 8, "Локальный вход") { inp ->
++                confirmAndSend(channel, Pro2Commands.localInputSource(inp), "Локальный вход $inp")
++            }
++        }
++        if (current != -1) {
++            labels.add("NO-OP — записать то же значение ($currentLabel)")
++            actions.add { confirmAndSend(channel, current, "NO-OP (без изменений)") }
++        }
++        labels.add("Распатчить (Silence)")
++        actions.add { confirmAndSend(channel, Pro2Commands.SOURCE_SILENCE, "не назначен") }
++        if (baseline != null) {
++            labels.add("↩ Вернуть исходный (${Pro2Commands.describeSource(baseline) ?: "0x%08x".format(baseline)})")
++            actions.add { confirmAndSend(channel, baseline, "исходный источник") }
++        }
++
++        android.app.AlertDialog.Builder(this)
++            .setTitle("Патчинг канала ${channel + 1} ($currentLabel)")
++            .setItems(labels.toTypedArray()) { _, which -> actions[which]() }
++            .setNegativeButton("Отмена", null)
++            .show()
++    }
++
++    /**
++     * Общий диалог выбора числа колесом - используется и для DL251 (1-48),
++     * и для локальных входов (1-8). NumberPicker - стандартный Android-
++     * виджет, создаётся программно, отдельный layout не нужен.
++     */
++    private fun showNumberPickerDialog(min: Int, max: Int, title: String, onPicked: (Int) -> Unit) {
++        val picker = android.widget.NumberPicker(this).apply {
++            minValue = min
++            maxValue = max
++            value = min
++            wrapSelectorWheel = false
++        }
++        val padding = (16 * resources.displayMetrics.density).toInt()
++        val container = android.widget.FrameLayout(this).apply {
++            setPadding(padding, padding, padding, padding)
++            addView(picker, android.widget.FrameLayout.LayoutParams(
++                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
++                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
++                android.view.Gravity.CENTER
++            ))
++        }
++        android.app.AlertDialog.Builder(this)
++            .setTitle(title)
++            .setView(container)
++            .setPositiveButton("Далее") { _, _ ->
++                // Значение колеса не всегда успевает зафиксироваться, если
++                // палец ещё касается виджета в момент тапа по кнопке -
++                // clearFocus() принудительно фиксирует текущее положение.
++                picker.clearFocus()
++                onPicked(picker.value)
++            }
++            .setNegativeButton("Отмена", null)
++            .show()
++    }
++
++    /**
++     * Второе подтверждение перед реальной записью. Патчинг меняет
++     * маршрутизацию звука, поэтому случайный тап по списку не должен
++     * ничего переключать.
++     */
++    private fun confirmAndSend(channel: Int, uSource: Int, human: String) {
++        android.app.AlertDialog.Builder(this)
++            .setTitle("Подтвердите")
++            .setMessage(
++                "Канал ${channel + 1} → $human\n\n" +
++                    "Значение: 0x%08x (dec %d)\n\n".format(uSource, uSource) +
++                    "Это изменит реальную маршрутизацию звука на пульте."
++            )
++            .setPositiveButton("Записать") { _, _ ->
++                sendRawAsync(Pro2Commands.setChannelSource(channel, uSource))
++                android.widget.Toast.makeText(
++                    this,
++                    "Отправлено: 0x%08x → канал ${channel + 1}".format(uSource),
++                    android.widget.Toast.LENGTH_SHORT
++                ).show()
++            }
++            .setNegativeButton("Отмена", null)
++            .show()
++    }
++
+     private var detailHpFilterInButton: Button? = null
+     private var detailLpFilterInButton: Button? = null
+     private var detailHpFreqSeek: SeekBar? = null
+@@ -2308,6 +2535,118 @@
+     }
+ 
+     /**
++     * Экран участников мьют-группы - точная копия openVcaMembers() выше,
++     * только layout/группа/адреса другие. ⚠ Структура НЕ подтверждена
++     * собственным захватом трафика (см. заметку у Pro2Commands.kt).
++     */
++    private fun openMuteGroupMembers(groupIndex: Int) {
++        val view = LayoutInflater.from(this).inflate(R.layout.activity_mute_group_members, channelDetailContainer, false)
++        channelDetailContainer.removeAllViews()
++        channelDetailContainer.addView(view)
++        channelDetailContainer.visibility = android.view.View.VISIBLE
++
++        openMuteGroupMembersIndex = groupIndex
++        muteGroupMemberButtons.clear()
++
++        view.findViewById<TextView>(R.id.textMuteGroupMembersTitle).text = "MUTE GROUP ${groupIndex + 1} MEMBERS"
++        view.findViewById<Button>(R.id.btnMuteGroupMembersBack).setOnClickListener {
++            channelDetailContainer.visibility = android.view.View.GONE
++            channelDetailContainer.removeAllViews()
++            openMuteGroupMembersIndex = null
++            muteGroupMemberButtons.clear()
++        }
++
++        val container = view.findViewById<android.widget.LinearLayout>(R.id.containerMuteGroupMembers)
++        container.removeAllViews()
++
++        fun sectionHeader(title: String) {
++            val header = TextView(this).apply {
++                text = title
++                setTextColor(Color.parseColor("#ff9f0a"))
++                setTypeface(typeface, android.graphics.Typeface.BOLD)
++                textSize = 13f
++                setPadding(0, 20, 0, 8)
++            }
++            container.addView(header)
++        }
++
++        fun memberGrid(labels: List<String>, childType: String, initial: (Int) -> Boolean, onToggle: (index: Int, member: Boolean) -> Unit) {
++            var row: android.widget.LinearLayout? = null
++            for ((i, label) in labels.withIndex()) {
++                if (i % 4 == 0) {
++                    row = android.widget.LinearLayout(this).apply {
++                        orientation = android.widget.LinearLayout.HORIZONTAL
++                    }
++                    container.addView(row, android.widget.LinearLayout.LayoutParams(
++                        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
++                        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
++                    ).apply { bottomMargin = 6 })
++                }
++                var memberState = initial(i)
++                val btn = Button(this).apply {
++                    setBackgroundResource(R.drawable.console_button_background)
++                    text = label
++                    textSize = 10f
++                    minHeight = 0
++                    backgroundTintList = null
++                    setPadding(4, 12, 4, 12)
++                    setTextColor(Color.parseColor(if (memberState) "#000000" else "#ffffff"))
++                    backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (memberState) "#ff9f0a" else "#3a3a3c"))
++                    layoutParams = android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
++                        .apply { marginEnd = 4 }
++                    setOnClickListener {
++                        memberState = !memberState
++                        backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(if (memberState) "#ff9f0a" else "#3a3a3c"))
++                        setTextColor(Color.parseColor(if (memberState) "#000000" else "#ffffff"))
++                        onToggle(i, memberState)
++                    }
++                }
++                muteGroupMemberButtons["$childType:$i"] = btn
++                row?.addView(btn)
++            }
++        }
++
++        val group = ConnectionHolder.muteGroupData[groupIndex]
++
++        sectionHeader("ВХОДНЫЕ КАНАЛЫ (1-56)")
++        memberGrid((1..56).map { n ->
++            val realName = ConnectionHolder.channelData.getOrNull(n - 1)?.name?.takeIf { it.isNotBlank() }
++            if (realName != null) "$n: $realName" else "CH $n"
++        }, "input", { i -> group.memberInput.getOrElse(i) { false } }) { i, member ->
++            sendRawAsync(Pro2Commands.setMuteGroupChildInput(i, groupIndex, member))
++        }
++
++        sectionHeader("AUX-ШИНЫ (1-16)")
++        memberGrid((1..16).map { n ->
++            val realName = ConnectionHolder.auxBusData.getOrNull(n - 1)?.name?.takeIf { it.isNotBlank() }
++            if (realName != null) "$n: $realName" else "BUS $n"
++        }, "submix", { i -> group.memberSubMix.getOrElse(i) { false } }) { i, member ->
++            sendRawAsync(Pro2Commands.setMuteGroupChildSubMix(i, groupIndex, member))
++        }
++
++        sectionHeader("AUX RETURNS (1-8)")
++        memberGrid((1..8).map { n ->
++            val realName = ConnectionHolder.auxReturnData.getOrNull(n - 1)?.name?.takeIf { it.isNotBlank() }
++            if (realName != null) "$n: $realName" else "AUX $n"
++        }, "auxreturn", { i -> group.memberAuxReturn.getOrElse(i) { false } }) { i, member ->
++            sendRawAsync(Pro2Commands.setMuteGroupChildAuxReturn(i, groupIndex, member))
++        }
++
++        sectionHeader("MAIN OUTS (1-8)")
++        memberGrid((1..8).map { "MAIN $it" }, "main", { i -> group.memberMain.getOrElse(i) { false } }) { i, member ->
++            sendRawAsync(Pro2Commands.setMuteGroupChildMain(i, groupIndex, member))
++        }
++
++        sectionHeader("МАСТЕР")
++        memberGrid(listOf("MASTER L", "MASTER R", "MASTER C"), "master", { i -> group.memberMaster.getOrElse(i) { false } }) { i, member ->
++            val letter = listOf("L", "R", "C")[i]
++            sendRawAsync(Pro2Commands.setMuteGroupChildMaster(letter, groupIndex, member))
++        }
++
++        subscribeMuteGroupMembers(groupIndex)
++    }
++
++    /**
+      * Общий блок компрессора (график + сетка крутилок) для aux-шины и Main
+      * Out - визуально та же структура, что и buildDynamicsBlock у канала
+      * (тот же TransferCurveView, тот же RotaryKnobView, та же сетка 2 в
+@@ -2775,7 +3114,10 @@
+             groupDetailKnobs[key] = knob
+         }
+ 
+-        addKnob("${ParamKind.COMP_PRESENCE}:0", "PRESENCE", data.compPresence, ParamKind.COMP_PRESENCE) { v -> data.compPresence = v; sendRawAsync(Pro2Commands.setMainOutCompPresence(index, v)) }
++        // PRESENCE убран: у MainOuts такого параметра нет. Пульт отвечал на
++        // подписку пустым blob-ом (7241 раз, ни одного значения), и датасет
++        // подтверждает - enCompLimPresence есть у Masters/MicInputs, но не
++        // здесь. Ручка была живой на вид, но не управляла ничем.
+         addKnob("${ParamKind.BUS_TRIM}:0", "BUS TRIM", data.busTrim) { v -> data.busTrim = v; sendRawAsync(Pro2Commands.setMainOutBusTrim(index, v)) }
+ 
+         fun addCycleButton(kind: ParamKind, label: String, initial: Int, onTap: () -> Unit) {
+@@ -2796,9 +3138,12 @@
+             groupDetailCycleButtons["$kind"] = btn
+         }
+ 
++        // STYLE остаётся - подтверждён живым трафиком (реальные значения),
++        // несмотря на то что в датасете его нет ни в одной группе.
+         addCycleButton(ParamKind.COMP_STYLE, "STYLE", data.compStyle) { sendRawAsync(Pro2Commands.setMainOutCompStyleNext(index)) }
+-        addCycleButton(ParamKind.COMP_FILTER_BANDWIDTH, "FILTER BANDWIDTH", data.compFilterBandwidth) { sendRawAsync(Pro2Commands.setMainOutCompFilterBandwidthNext(index)) }
+-        addCycleButton(ParamKind.COMP_KNEE, "KNEE", data.compKnee) { sendRawAsync(Pro2Commands.setMainOutCompKneeNext(index)) }
++        // FILTER BANDWIDTH и KNEE убраны по той же причине, что и PRESENCE:
++        // у MainOuts этих параметров нет (пустой blob в ответ на подписку,
++        // подтверждено датасетом). Их место - Masters / MicInputs / SubMixes.
+     }
+ 
+     /**
+@@ -3266,12 +3611,23 @@
+         }
+         detailLinkButton = btnLink
+ 
+-        // Патчинг - только чтение, см. заметку в XML/Pro2Commands.kt.
++        // Патчинг - чтение + ТЕСТОВАЯ запись, см. заметку в Pro2Commands.kt.
+         val textSource = view.findViewById<TextView>(R.id.textDetailChannelSource)
+         val currentSource = ConnectionHolder.channelData[channel].channelSource
+-        textSource.text = if (currentSource >= 0) "SOURCE: $currentSource" else "SOURCE: —"
++        textSource.text = sourceLabel(currentSource)
+         detailChannelSourceText = textSource
+ 
++        // Запоминаем исходный источник ОДИН раз на канал - чтобы после
++        // тестов можно было вернуть ровно то, что было до нашего
++        // вмешательства, а не "то, что кажется правильным".
++        if (currentSource != -1 && ConnectionHolder.patchBaseline[channel] == null) {
++            ConnectionHolder.patchBaseline[channel] = currentSource
++        }
++
++        view.findViewById<Button>(R.id.btnDetailPatch).setOnClickListener {
++            showPatchDialog(channel)
++        }
++
+         val seekPan = view.findViewById<SeekBar>(R.id.seekDetailPan)
+         val textPan = view.findViewById<TextView>(R.id.textDetailPanValue)
+         detailPanSeek = seekPan
+@@ -3456,9 +3812,13 @@
+         val data = ConnectionHolder.channelData[channel]
+         val bandNames = arrayOf("BASS", "LOW-MID", "MID-HIGH", "TREBLE")
+         val bandKinds = arrayOf(Pro2Commands.EqBand.BASS, Pro2Commands.EqBand.LOW_MID, Pro2Commands.EqBand.MID_HIGH, Pro2Commands.EqBand.TREBLE)
++        // Цвета полос - как на экране пульта (по фото графика EQ):
++        // bass - красный, lo mid - жёлтый, hi mid - зелёный, treble - синий.
++        // Порядок соответствует bandOrder в EqCurveView
++        // (BASS, LOW_MID, MID_HIGH, TREBLE).
+         val bandColours = arrayOf(
+-            Color.parseColor("#34c759"), Color.parseColor("#ffcc00"),
+-            Color.parseColor("#ff9500"), Color.parseColor("#af52de")
++            Color.parseColor("#ff3b30"), Color.parseColor("#ffcc00"),
++            Color.parseColor("#34c759"), Color.parseColor("#0a84ff")
+         )
+ 
+         // --- Заголовок: EQ IN ---
+@@ -4067,6 +4427,44 @@
+         return if (sec < 1f) "%.0f ms".format(sec * 1000) else "%.2f s".format(sec)
+     }
+ 
++    // ИСПРАВЛЕНО по официальному мануалу PRO2 (раздел "Main processing
++    // functions", стр. 315): "Ratio 25:1 to 1:1". Раньше здесь стояло
++    // 1:1..10:1 - я вывел верхнюю границу из строки "10:1", найденной
++    // в прошивке рядом с "Compressor Ratio control". Догадка оказалась
++    // неверной: 10:1 там, судя по всему, просто пример форматирования,
++    // а не предел шкалы.
++    private val compRatioPoints = listOf(0f to 1f, 1f to 25f)
++
++    // === ГЕЙТ - все диапазоны из официального мануала PRO2 ===
++    // Спецификация (стр. 315) + описания ручек (стр. 254):
++    //   Threshold  -50 dBu .. +25 dBu
++    //   Attack     20 us .. 20 ms
++    //   Hold       5 ms .. 2 s
++    //   Release    2 ms .. 2 s
++    //   Range      100 dB .. 0 dB (макс. подавление ниже порога)
++    //   Filter     50 Hz .. 15 kHz
++    // Раньше все семь ручек гейта показывали сырые 0.00-1.00, потому что
++    // ни в датасете, ни в строках прошивки числовых подсказок не было.
++    //
++    // Форма кривой (положение промежуточных точек) взята такой же, как у
++    // компрессора выше - там она подтверждена практикой. Для времязадающих
++    // параметров это ощутимо лучше линейной интерполяции, но точные
++    // промежуточные значения мануалом не заданы.
++    private val gateThresholdPoints = listOf(0f to -50f, 0.35f to -25f, 0.65f to 0f, 1f to 25f)
++    private val gateAttackPoints = listOf(0f to 0.02f, 0.35f to 0.5f, 0.65f to 5f, 1f to 20f)
++    private val gateHoldPoints = listOf(0f to 0.005f, 0.35f to 0.1f, 0.65f to 0.6f, 1f to 2f)
++    private val gateReleasePoints = listOf(0f to 0.002f, 0.35f to 0.1f, 0.65f to 0.6f, 1f to 2f)
++    // Range: 0 = максимальное подавление (-100 дБ), 1 = гейт не давит (0 дБ).
++    private val gateRangePoints = listOf(0f to -100f, 0.35f to -40f, 0.65f to -15f, 1f to 0f)
++    private val gateFilterFreqPoints = listOf(0f to 50f, 0.35f to 300f, 0.65f to 2500f, 1f to 15000f)
++
++    /** Время в секундах -> "12.5 ms" / "1.20 s" (гейт работает и в мкс-диапазоне). */
++    private fun formatSeconds(sec: Float): String = when {
++        sec < 0.001f -> "%.0f us".format(sec * 1_000_000f)
++        sec < 1f -> "%.1f ms".format(sec * 1000f)
++        else -> "%.2f s".format(sec)
++    }
++
+     /** Показывает реальные единицы там, где формула подтверждена, иначе сырое 0.00-1.00. */
+     private fun formatKnobValue(kind: ParamKind, v: Float): String = when (kind) {
+         ParamKind.COMP_THRESHOLD -> formatCompThreshold(v)
+@@ -4075,6 +4473,13 @@
+         ParamKind.COMP_MAKEUP -> "%+.1f dB".format(interpolate(v, compMakeupPoints))
+         ParamKind.COMP_PRESENCE -> "%.0f dB".format(interpolate(v, compPresencePoints))
+         ParamKind.COMP_FILTER_FREQ -> EqCurveView.formatHz(interpolate(v, compFilterFreqPoints))
++        ParamKind.COMP_RATIO -> "%.1f:1".format(interpolate(v, compRatioPoints))
++        ParamKind.GATE_THRESHOLD -> "%.1f dB".format(interpolate(v, gateThresholdPoints))
++        ParamKind.GATE_ATTACK -> formatSeconds(interpolate(v, gateAttackPoints) / 1000f)
++        ParamKind.GATE_HOLD -> formatSeconds(interpolate(v, gateHoldPoints))
++        ParamKind.GATE_RELEASE -> formatSeconds(interpolate(v, gateReleasePoints))
++        ParamKind.GATE_RANGE -> "%.0f dB".format(interpolate(v, gateRangePoints))
++        ParamKind.GATE_FILTER_FREQ -> EqCurveView.formatHz(interpolate(v, gateFilterFreqPoints))
+         else -> "%.2f".format(v)
+     }
+ 
+@@ -4646,6 +5051,7 @@
+                 handles.addAll(ConnectionHolder.vcaSubscriptions.keys)
+                 handles.addAll(ConnectionHolder.mainOutSubscriptions.keys)
+                 handles.addAll(ConnectionHolder.vcaMemberSubscriptions.keys)
++                handles.addAll(ConnectionHolder.muteGroupMemberSubscriptions.keys)
+                 CoroutineScope(Dispatchers.IO).launch {
+                     for (handle in handles) {
+                         try {
+@@ -4661,18 +5067,12 @@
+             }
+             receiveJob?.cancel()
+             pollJob?.cancel()
+-            subscriptions.clear()
+-            masterSubscriptions.clear()
+-            auxSubscriptions.clear()
+-            auxBusSubscriptions.clear()
+-            vcaSubscriptions.clear()
+-            mainOutSubscriptions.clear()
+-            ConnectionHolder.vcaMemberSubscriptions.clear()
+-            auxSendsSubscribed.clear()
+-            eqSubscribed.clear()
+-            gateSubscribed.clear()
+-            inputExtrasSubscribed.clear()
+-            compGateExtrasSubscribed.clear()
++            // ИСПРАВЛЕНИЕ: раньше карты перечислялись здесь вручную и две
++            // из них (mainOutExtrasSubscribed, auxBusExtrasSubscribed) не
++            // очищались - после смены режима детальные экраны MATRIX и AUX
++            // считали себя уже подписанными и молча переставали
++            // обновляться. Теперь одна общая функция.
++            ConnectionHolder.clearAllSubscriptionState()
+             // Сбрасываем ТОЛЬКО признак подписки - следующий режим (при
+             // входе в MainActivity заново) должен подписаться с нуля под
+             // себя, а не решить, что он "восстанавливается после поворота".
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/Pro2Commands.kt	2026-08-23 19:37:04.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/Pro2Commands.kt	2026-08-31 16:24:11.526304154 +0000
+@@ -72,30 +72,83 @@
+     // ("unknown") - нужна проверка на реальном пульте.
+     fun linkAddress() = "/enPPCSwitchMessage/$GROUP/enChannelLinked"
+ 
+-    // === Патчинг (какой физический вход подключён к каналу) - ТОЛЬКО
+-    // ЧТЕНИЕ, специально без set-функции. Подтверждено найденным в архиве
+-    // Pro2 Offline Editor, что значение - составная упакованная структура
+-    // (тип устройства + DeviceID + номер карты через битовые поля), а не
+-    // простой номер входа - без расшифрованной формулы отправка
+-    // произвольного числа рискует переключить канал на неожиданный
+-    // физический вход прямо во время живого выступления. Сначала собираем
+-    // данные (какое число соответствует какому реальному входу), потом
+-    // добавим запись.
++    // === ПАТЧИНГ ВХОДА (enChannelSource) - кодировка РАСШИФРОВАНА, уровень A.
++    //
++    // Значение - 32-битное беззнаковое:
++    //     uSource = Type            (биты 0-7,  младший байт)
++    //             | path    << 8    (биты 8-19, 12 бит)
++    //             | Channel << 20   (биты 20-27, 8 бит)
++    // Отдельный флаг 0x80000000 = Silence Bit (источник не назначен).
++    //
++    // Подтверждено четырьмя независимыми путями: разбор Mac Offline Editor,
++    // SceneData::ConvertDSPSource, CSystemInputSource::Assign в реальной
++    // прошивке, и живой сетевой трафик с Pro2 (12 точек по DL251, обе
++    // границы; 3 точки по локальным входам).
++    //
++    // ВАЖНО про запись: формат записи отдельно не наблюдался в захватах,
++    // НО enChannelColour - параметр того же типа (enPPCIntegerMessage), в
++    // той же группе, и его запись тегами ",ii" (индекс канала + int32
++    // значение) давно работает на реальном пульте. Поэтому пишем так же.
+     fun channelSourceAddress() = "/enPPCIntegerMessage/$GROUP/enChannelSource"
+-    // ПОДТВЕРЖДЕНО реальным трафиком Mixtender 2 (перехват "TRIM" ручки на канале 32):
+-    // адрес enInputGain НЕ используется приложением для этой ручки вообще -
+-    // реально используется enMicSplitStepGain. Обозначение в JSON-файле muffeeee
+-    // ("Sets channel input gain" для enInputGain) оказалось не тем, что физически
+-    // происходит при вращении ручки TRIM в реальном приложении - имя параметра
+-    // в оф. списке говорит про "micsplit return gain", но по факту именно он
+-    // управляет тем, что в интерфейсе выглядит как input gain trim.
+-    // ВАЖНО: на пульте на самом деле ДВА разных гейна (подтверждено реальным
+-    // захватом обоих):
+-    // - enInputGain - основной входной GAIN (аналоговый преамп)
+-    // - enMicSplitStepGain - GAIN TRIM (доп. подстройка). Раньше мы по
+-    //   ошибке называли ЭТОТ параметр просто "GAIN" - на самом деле это TRIM.
+-    fun gainAddress() = "/enPPCRotaryMessage/$GROUP/enInputGain"
+-    fun gainTrimAddress() = "/enPPCRotaryMessage/$GROUP/enMicSplitStepGain"
++
++    /** Источник не назначен (распатчено). */
++    const val SOURCE_SILENCE: Int = -2147483648 // 0x80000000
++
++    /** DL251 (Type 42), сквозной физический канал 1..48, path всегда 0. */
++    fun dl251Source(physicalChannel: Int): Int =
++        42 or ((physicalChannel - 1) shl 20)
++
++    /** Локальный вход поверхности (Type 14 LineIOCPU, path 17), вход 1..8. */
++    fun localInputSource(physicalInput: Int): Int =
++        0x110e or ((physicalInput - 1) shl 20)
++
++    /**
++     * Человекочитаемая расшифровка uSource. Возвращает null, если значение
++     * не соответствует ни одной ПОДТВЕРЖДЁННОЙ трафиком форме - в этом
++     * случае наверху показываем сырое число, а не выдумываем подпись.
++     */
++    fun describeSource(uSource: Int): String? {
++        if (uSource == SOURCE_SILENCE) return "не назначен"
++        if (uSource < 0) return null
++        val type = uSource and 0xFF
++        val path = (uSource shr 8) and 0xFFF
++        val channel = (uSource shr 20) and 0xFF
++        return when {
++            type == 42 && path == 0 && channel <= 47 -> "DL251 ch ${channel + 1}"
++            type == 14 && path == 17 && channel <= 7 -> "Локальный вход ${channel + 1}"
++            else -> null
++        }
++    }
++
++    /**
++     * ЗАПИСЬ патчинга. Вызывать только осознанно - меняет реальную
++     * маршрутизацию звука на пульте.
++     */
++    fun setChannelSource(channelIndex: Int, uSource: Int): ByteArray =
++        OscUtil.encode(channelSourceAddress(), listOf(channelIndex, uSource))
++
++    // === ДВА ГЕЙНА НА КАНАЛЕ: enInputGain и enMicSplitStepGain.
++    //
++    // РАЗРЕШЕНО ОФИЦИАЛЬНЫМ МАНУАЛОМ PRO2 - привязка ниже верная:
++    //   * enMicSplitStepGain = "stage box control knob ... adjusts the
++    //     input gain of the remote amplifier in 5dB steps, ranging from
++    //     -5dB to +40dB" (стр. 251). Это аналоговый гейн преампа на
++    //     стейджбоксе - то есть настоящий GAIN. Само имя параметра
++    //     ("StepGain") сходится с шаговой регулировкой по 5 дБ.
++    //   * enInputGain = "console digital trim (gives +20dB to -40dB
++    //     continuous trim)" (стр. 70). Это цифровой ТРИМ.
++    //
++    // Тем самым снято противоречие, о котором я предупреждал: более
++    // раннее наблюдение по трафику Mixtender ("TRIM шлёт
++    // enMicSplitStepGain") было ошибочным. На пульте обе ручки физически
++    // подписаны "gain trim" и переключаются кнопкой SWAP - вероятно,
++    // поэтому при захвате их и перепутали.
++    //
++    // ⚠ Диапазоны РАЗНЫЕ и пока не откалиброваны: GAIN шагами по 5 дБ
++    // (-5..+40), TRIM непрерывный (-40..+20). Сейчас обе ручки
++    // показывают сырые 0.00-1.00.
++    fun gainAddress() = "/enPPCRotaryMessage/$GROUP/enMicSplitStepGain"
++    fun gainTrimAddress() = "/enPPCRotaryMessage/$GROUP/enInputGain"
+     fun nameAddress() = "/enPPCStringMessage/$GROUP/enPathname"
+     fun colourAddress() = "/enPPCIntegerMessage/$GROUP/enChannelColour"
+     // Подтверждено реальным трафиком (метры в самом начале проекта): только чтение,
+@@ -337,16 +390,25 @@
+     private fun eqBandSuffix(band: EqBand) = when (band) {
+         EqBand.BASS -> "Bass"
+         EqBand.LOW_MID -> "LowMid"
+-        EqBand.MID_HIGH -> "MidHigh"
++        // ИСПРАВЛЕНО: было "MidHigh". Реальное имя в прошивке -
++        // "HighMid" (enPEQFrequencyHighMid / enPEQGainHighMid /
++        // enPEQWidthHighMid). С "MidHigh" пульт отвечал на подписку
++        // blob-ом НУЛЕВОЙ длины, то есть "такого параметра нет", и вся
++        // третья полоса эквалайзера молча не работала. В датасете
++        // muffeeee тут опечатка - там указано MidHigh.
++        EqBand.MID_HIGH -> "HighMid"
+         EqBand.TREBLE -> "Treble"
+     }
+ 
+     fun eqInAddress() = "/enPPCSwitchMessage/$GROUP/enPEQIn"
+     fun eqBandActiveAddress(band: EqBand): String {
+-        // ВАЖНО: у high-mid параметр называется enPEQHighMid (без "Active" в
+-        // конце), у остальных трёх - enPEQ<Band>Active. Несогласованность
++        // ИСПРАВЛЕНО: было enPEQHighMid (без "Active"). Пульт отвечал
++        // пустым blob-ом. В прошивке параметр называется
++        // enPEQHighMidActive - то есть схема как раз согласованная,
++        // enPEQ<Band>Active для всех четырёх полос.
++        // Историческая заметка: несогласованность
+         // есть уже в самом списке команд, не опечатка с нашей стороны.
+-        val name = if (band == EqBand.MID_HIGH) "enPEQHighMid" else "enPEQ${eqBandSuffix(band)}Active"
++        val name = "enPEQ${eqBandSuffix(band)}Active"
+         return "/enPPCSwitchMessage/$GROUP/$name"
+     }
+     fun eqFreqAddress(band: EqBand) = "/enPPCRotaryMessage/$GROUP/enPEQFrequency${eqBandSuffix(band)}"
+@@ -687,13 +749,13 @@
+     fun mainOutCompStyleCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompStyle"
+     fun setMainOutCompStyleNext(index: Int): ByteArray = OscUtil.encode(mainOutCompStyleCycleAddress(), listOf(index, 1))
+ 
+-    fun mainOutCompFilterBandwidthAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidthCycle"
+-    fun mainOutCompFilterBandwidthCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidthCycle"
++    fun mainOutCompFilterBandwidthAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidth"
++    fun mainOutCompFilterBandwidthCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimFilterBandwidth"
+     fun setMainOutCompFilterBandwidthNext(index: Int): ByteArray =
+         OscUtil.encode(mainOutCompFilterBandwidthCycleAddress(), listOf(index, 1))
+ 
+-    fun mainOutCompKneeAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimKneeCycle"
+-    fun mainOutCompKneeCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimKneeCycle"
++    fun mainOutCompKneeAddress() = "/enPPCIntegerMessage/$MAIN_OUT_GROUP/enCompLimKnee"
++    fun mainOutCompKneeCycleAddress() = "/enPPCSwitchMessage/$MAIN_OUT_GROUP/enCompLimKnee"
+     fun setMainOutCompKneeNext(index: Int): ByteArray = OscUtil.encode(mainOutCompKneeCycleAddress(), listOf(index, 1))
+ 
+     // === Aux-шина - LINK (стерео-пара). ПОДТВЕРЖДЕНО реальным захватом
+@@ -702,12 +764,15 @@
+     fun setAuxBusPairingNext(index: Int): ByteArray = OscUtil.encode(auxBusPairingAddress(), listOf(index, 1))
+ 
+     // === Aux-шины - EQ (6 полос) и компрессор. Та же структура, что у Main
+-    // Outs, но с ДРУГИМИ именами параметров - сверено с датасетом отдельно,
+-    // не предполагалось по аналогии. Главное отличие: gain для EQ называется
+-    // enPEQQGainBand (двойное Q - так в самой прошивке, не опечатка).
++    // Outs. ИСПРАВЛЕНО: gain для EQ был enPEQQGainBand (с двойным Q) -
++    // считалось, что так в прошивке. Проверка показала обратное: строка "enPEQQGain"
++    // встречается в прошивке и Offline Editor РОВНО НОЛЬ раз, а пульт
++    // отвечал на подписку blob-ом нулевой длины ("параметра нет") на всех
++    // шести полосах. Двойное Q - опечатка в датасете muffeeee. Реальное
++    // имя такое же, как у Masters и MainOuts: enPEQGainBand1-6.
+     // НЕ подтверждено реальным захватом. ===
+     fun auxBusEqFreqAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQFrequencyBand${band + 1}"
+-    fun auxBusEqGainAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQQGainBand${band + 1}"
++    fun auxBusEqGainAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQGainBand${band + 1}"
+     fun auxBusEqWidthAddress(band: Int) = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enPEQWidthBand${band + 1}"
+     fun auxBusHpFreqAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enGEQHPFrequency"
+     fun auxBusLpFreqAddress() = "/enPPCRotaryMessage/$AUX_BUS_GROUP/enGEQLPFrequency"
+@@ -804,4 +869,41 @@
+     // при каждом тапе. Глобальный параметр - индекса канала/группы нет. ===
+     fun globalTapAddress() = "/enPPCSwitchMessage/enGlobals/enGlobalTapSwitch"
+     fun setGlobalTap(): ByteArray = OscUtil.encode(globalTapAddress(), listOf(1))
++
++    // === Мьют-группы - структура полностью симметрична VCA-группам выше
++    // (см. подробную заметку у vcaChild*Address()), из того же датасета
++    // muffeeee, НЕ подтверждено собственным захватом. Число групп (8) -
++    // предположение по аналогии с 8 VCA-группами, см. заметку у
++    // ConnectionHolder.MUTE_GROUP_COUNT.
++    //
++    // ВАЖНО про enMuteGroupMute: датасет описывает его прямым текстом как
++    // "This toggles the mute groups to be muted or unmuted" - однозначно
++    // toggle-параметр (в отличие от спорного случая с mute одиночного
++    // канала, см. пункт 1 hardware_check_list.md). Шлём константу 1.
++    private const val MUTE_GROUP_GROUP = "enVirtualMuteGroups"
++    fun muteGroupMuteAddress() = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupMute"
++    fun muteGroupNameAddress() = "/enPPCStringMessage/$MUTE_GROUP_GROUP/enPathname"
++    fun muteGroupChildInputAddress(inputIndex: Int) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildInput${inputIndex + 1}"
++    fun muteGroupChildSubMixAddress(busIndex: Int) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildSubMix${busIndex + 1}"
++    fun muteGroupChildAuxReturnAddress(auxIndex: Int) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildAuxReturn${auxIndex + 1}"
++    fun muteGroupChildMainAddress(mainIndex: Int) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildMain${mainIndex + 1}"
++    fun muteGroupChildMasterAddress(letter: String) = "/enPPCSwitchMessage/$MUTE_GROUP_GROUP/enMuteGroupChildMaster$letter"
++
++    fun setMuteGroupMute(groupIndex: Int): ByteArray =
++        OscUtil.encode(muteGroupMuteAddress(), listOf(groupIndex, 1))
++
++    fun setMuteGroupChildInput(inputIndex: Int, groupIndex: Int, member: Boolean): ByteArray =
++        OscUtil.encode(muteGroupChildInputAddress(inputIndex), listOf(groupIndex, if (member) 1 else 0))
++
++    fun setMuteGroupChildSubMix(busIndex: Int, groupIndex: Int, member: Boolean): ByteArray =
++        OscUtil.encode(muteGroupChildSubMixAddress(busIndex), listOf(groupIndex, if (member) 1 else 0))
++
++    fun setMuteGroupChildAuxReturn(auxIndex: Int, groupIndex: Int, member: Boolean): ByteArray =
++        OscUtil.encode(muteGroupChildAuxReturnAddress(auxIndex), listOf(groupIndex, if (member) 1 else 0))
++
++    fun setMuteGroupChildMain(mainIndex: Int, groupIndex: Int, member: Boolean): ByteArray =
++        OscUtil.encode(muteGroupChildMainAddress(mainIndex), listOf(groupIndex, if (member) 1 else 0))
++
++    fun setMuteGroupChildMaster(letter: String, groupIndex: Int, member: Boolean): ByteArray =
++        OscUtil.encode(muteGroupChildMasterAddress(letter), listOf(groupIndex, if (member) 1 else 0))
+ }
+--- extracted/MidasFaderTest/app/src/main/java/com/example/midasfadercontrol/EqCurveView.kt	2026-08-20 16:53:23.000000000 +0000
++++ work/app/src/main/java/com/example/midasfadercontrol/EqCurveView.kt	2026-08-31 16:23:53.851368873 +0000
+@@ -39,8 +39,12 @@
+         private val bandHzRangeStatic = mapOf(
+             BandId.BASS to (16f to 400f),
+             BandId.LOW_MID to (80f to 2000f),
+-            // Уточнено по новому фото экрана пульта (hi mid): было 350,
+-            // на шкале реально 320.
++            // 320 Гц - ПОДТВЕРЖДЕНО фотографией лимба на экране пульта:
++            // метки hi mid идут 320/550/950/1k6/2k7/4k7/8k. Проверка
++            // геометрии: шкала логарифмическая с шагом ~1.71, и
++            // 320 * 1.71^6 = 7724 (≈8k, сходится), тогда как
++            // 350 * 1.71^6 = 8448 (не сходится). В текстовой заметке было
++            // записано "350" - это описка, фото имеет приоритет.
+             BandId.MID_HIGH to (320f to 8000f),
+             BandId.TREBLE to (1000f to 25000f)
+         )
+@@ -51,15 +55,19 @@
+             return exp(ln(minHz) + raw.coerceIn(0f, 1f) * (ln(maxHz) - ln(minHz)))
+         }
+ 
+-        // WIDTH (добротность полосы) - подтверждено реальным диапазоном
+-        // 0.1-3.0 (из заметок при тестировании на пульте), но САМА форма
+-        // зависимости (линейная/логарифмическая) не подтверждена - берём
+-        // простую линейную интерполяцию как разумное предположение по
+-        // умолчанию.
++        // WIDTH (добротность) - диапазон 0.1-3.0 подтверждён.
++        //
++        // ИСПРАВЛЕНО: шкала ЛОГАРИФМИЧЕСКАЯ, а не линейная. По фото лимба
++        // метки идут .1 / .3 / 1 / 3 через равные углы, то есть каждый шаг
++        // - умножение примерно на 3.1 (0.1*3.107^3 = 3.0). Линейная
++        // формула давала в середине хода 1.55 вместо реальных 0.55 -
++        // почти втрое мимо, из-за чего колокол на графике был заметно
++        // шире, чем на пульте, при том же положении ручки.
+         private const val widthMin = 0.1f
+         private const val widthMax = 3.0f
+ 
+-        fun rawToWidthPublic(raw: Float): Float = widthMin + raw.coerceIn(0f, 1f) * (widthMax - widthMin)
++        fun rawToWidthPublic(raw: Float): Float =
++            widthMin * (widthMax / widthMin).pow(raw.coerceIn(0f, 1f))
+ 
+         fun formatWidth(width: Float): String = "%.2f".format(width)
+ 
+@@ -67,13 +75,47 @@
+         fun formatHz(hz: Float): String =
+             if (hz >= 1000f) "%.1f kHz".format(hz / 1000f) else "%.0f Hz".format(hz)
+ 
+-        // Тот же диапазон, что и в самом графике (gainRangeDb в теле класса) -
+-        // ±16 дБ, уточнено по фото шкалы пульта.
+-        private const val eqGainRangeDb = 16f
+-        fun formatEqGain(raw: Float): String {
+-            val db = (raw.coerceIn(0f, 1f) - 0.5f) * 2f * eqGainRangeDb
+-            return "%+.1f dB".format(db)
++        // GAIN - диапазон ±16 дБ подтверждён.
++        //
++        // ИСПРАВЛЕНО: шкала НЕ линейная. По фото лимба метки идут
++        // 16 / 10 / 0 / 10 / 16 через равные углы, то есть на первую
++        // четверть хода приходится 6 дБ (16->10), а на вторую - 10 дБ
++        // (10->0). Края шкалы "сжаты" - так делают, чтобы около нуля
++        // регулировка была точнее. Линейная формула врала до 2 дБ в
++        // четвертях хода (показывала -8 там, где на пульте -10).
++        private val gainPoints = listOf(
++            0f to -16f, 0.25f to -10f, 0.5f to 0f, 0.75f to 10f, 1f to 16f
++        )
++
++        /** Сырое 0..1 -> дБ по реальной шкале лимба. */
++        fun rawToGainDb(raw: Float): Float {
++            val x = raw.coerceIn(0f, 1f)
++            for (i in 0 until gainPoints.size - 1) {
++                val (x0, y0) = gainPoints[i]
++                val (x1, y1) = gainPoints[i + 1]
++                if (x <= x1) {
++                    val t = if (x1 == x0) 0f else (x - x0) / (x1 - x0)
++                    return y0 + (y1 - y0) * t
++                }
++            }
++            return gainPoints.last().second
++        }
++
++        /** дБ -> сырое 0..1 (обратная к rawToGainDb, для перетаскивания точки). */
++        fun gainDbToRaw(db: Float): Float {
++            val d = db.coerceIn(-16f, 16f)
++            for (i in 0 until gainPoints.size - 1) {
++                val (x0, y0) = gainPoints[i]
++                val (x1, y1) = gainPoints[i + 1]
++                if (d <= y1) {
++                    val t = if (y1 == y0) 0f else (d - y0) / (y1 - y0)
++                    return x0 + (x1 - x0) * t
++                }
++            }
++            return 1f
+         }
++
++        fun formatEqGain(raw: Float): String = "%+.1f dB".format(rawToGainDb(raw))
+     }
+ 
+     data class Band(
+@@ -143,6 +185,14 @@
+         color = Color.parseColor("#33ff9f0a")
+     }
+     private val nodePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
++    // Заливка и контур ОТДЕЛЬНОЙ полосы своим цветом (как на пульте).
++    // Цвет выставляется на каждую полосу в onDraw, здесь только стиль.
++    private val bandFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
++    private val bandLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
++        style = Paint.Style.STROKE
++        strokeWidth = 2f
++        strokeCap = Paint.Cap.ROUND
++    }
+     private val nodeStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+         style = Paint.Style.STROKE
+         strokeWidth = 3f
+@@ -194,17 +244,88 @@
+         return hzToRaw(hz, band)
+     }
+ 
++    // Диапазоны фильтров из официального мануала PRO2 (стр. 314):
++    //   hi pass 10 Hz .. 400 Hz, lo pass 2 kHz .. 20 kHz.
++    // ИСПРАВЛЕНО: раньше сырое значение 0..1 клалось freqToX() линейно на
++    // ВСЮ ось графика (20 Гц..20 кГц). Из-за этого маркер HP при значении
++    // 0.5 оказывался около 630 Гц вместо ~63 Гц, а маркер LP - в районе
++    // 630 Гц вместо ~6.3 кГц, то есть вообще вне своего диапазона. Ползунки
++    // при этом показывали правильное положение - расходился именно график.
++    private val hpHzRange = 10f to 400f
++    private val lpHzRange = 2000f to 20000f
++
++    private fun rawToRangeHz(raw: Float, range: Pair<Float, Float>): Float =
++        exp(ln(range.first) + raw.coerceIn(0f, 1f) * (ln(range.second) - ln(range.first)))
++
++    private fun rangeHzToRaw(hz: Float, range: Pair<Float, Float>): Float {
++        val clamped = hz.coerceIn(range.first, range.second)
++        return ((ln(clamped) - ln(range.first)) / (ln(range.second) - ln(range.first))).coerceIn(0f, 1f)
++    }
++
++    /** Позиция маркера фильтра по X - через реальный диапазон, а не всю ось. */
++    private fun hpToX(raw: Float) = plotLeft + hzToXNorm(rawToRangeHz(raw, hpHzRange)) * (plotRight - plotLeft)
++    private fun lpToX(raw: Float) = plotLeft + hzToXNorm(rawToRangeHz(raw, lpHzRange)) * (plotRight - plotLeft)
++    private fun xToHpRaw(x: Float) = rangeHzToRaw(xNormToHz(xToFreq(x)), hpHzRange)
++    private fun xToLpRaw(x: Float) = rangeHzToRaw(xNormToHz(xToFreq(x)), lpHzRange)
++
+     private fun freqToX(f: Float) = plotLeft + f.coerceIn(0f, 1f) * (plotRight - plotLeft)
+     private fun xToFreq(x: Float) = ((x - plotLeft) / (plotRight - plotLeft)).coerceIn(0f, 1f)
+ 
+     private fun gainToY(g: Float): Float {
+-        val db = (g - 0.5f) * 2f * gainRangeDb
++        val db = rawToGainDb(g)
+         return plotBottom - (db + gainRangeDb) / (2 * gainRangeDb) * (plotBottom - plotTop)
+     }
+     private fun yToGain(y: Float): Float {
+         val t = ((plotBottom - y) / (plotBottom - plotTop)).coerceIn(0f, 1f)
+         val db = t * (2 * gainRangeDb) - gainRangeDb
+-        return (db / (2 * gainRangeDb) + 0.5f).coerceIn(0f, 1f)
++        return gainDbToRaw(db)
++    }
++
++    /**
++     * Прямой перевод дБ -> координата Y. Нужен отдельно от gainToY():
++     * gainToY принимает СЫРОЕ значение ручки (0..1) и сам прогоняет его
++     * через нелинейную шкалу лимба. Суммарная кривая же считается сразу
++     * в дБ, и прогонять её через ту же шкалу второй раз нельзя - это
++     * искажало бы график (ошибка появилась при переходе на нелинейную
++     * шкалу gain и здесь исправлена).
++     */
++    private fun dbToY(db: Float): Float {
++        val clamped = db.coerceIn(-gainRangeDb, gainRangeDb)
++        return plotBottom - (clamped + gainRangeDb) / (2 * gainRangeDb) * (plotBottom - plotTop)
++    }
++
++    /**
++     * Вклад ОДНОЙ полосы в дБ на позиции tx (0..1 по логарифмической оси).
++     * Вынесено в отдельную функцию, чтобы одну и ту же математику
++     * использовали и суммарная кривая, и заливка каждой полосы своим
++     * цветом (как на экране пульта).
++     */
++    private fun bandDbAt(band: Band, bandId: BandId, tx: Float): Float {
++        val bandDb = rawToGainDb(band.gain)
++        val bandXNorm = hzToXNorm(rawToHz(band.freq, bandId))
++        val actualWidth = rawToWidthPublic(band.width)
++        val widthFactor = (actualWidth * octaveNorm).coerceIn(0.008f, 0.5f)
++        // BELL (mode 0/PARAMETRIC) - симметричный колокол. SHELF (1/2/3 -
++        // BRIGHT/CLASSIC/SOFT) - "полка" с разной крутизной перехода.
++        // Реальная акустическая разница между тремя shelf-вариантами
++        // пультом не документирована - это условное визуальное
++        // приближение, чтобы было видно, что режимы разные.
++        val isShelf = band.shapeMode != 0 && (bandId == BandId.BASS || bandId == BandId.TREBLE)
++        val shelfSteepness = when (band.shapeMode) {
++            1 -> widthFactor * 0.5f
++            2 -> widthFactor * 1.0f
++            3 -> widthFactor * 1.8f
++            else -> widthFactor
++        }
++        val influence = if (isShelf && bandId == BandId.BASS) {
++            1f / (1f + Math.E.toFloat().pow((tx - bandXNorm) / shelfSteepness))
++        } else if (isShelf && bandId == BandId.TREBLE) {
++            1f / (1f + Math.E.toFloat().pow(-(tx - bandXNorm) / shelfSteepness))
++        } else {
++            val dist = abs(tx - bandXNorm)
++            Math.E.toFloat().pow(-(dist * dist) / (2 * widthFactor * widthFactor))
++        }
++        return bandDb * influence
+     }
+ 
+     override fun onDraw(canvas: Canvas) {
+@@ -229,6 +350,41 @@
+             canvas.drawText("%+d".format(db.toInt()), 2f, y + 7f, axisTextPaint)
+         }
+ 
++        // ЗАЛИВКА КАЖДОЙ ПОЛОСЫ СВОИМ ЦВЕТОМ - как на экране пульта: там
++        // видно не только итоговую кривую, но и вклад каждой полосы
++        // отдельно, залитый её цветом от линии 0 дБ. Сразу понятно, какая
++        // ручка что делает, без вглядывания в суммарную кривую.
++        // Рисуем ПОД суммарной кривой, чтобы она оставалась читаемой.
++        for ((i, band) in bands.withIndex()) {
++            if (!band.active) continue
++            val bandId = bandOrder[i]
++            // Полоса на нуле не даёт вклада - не засоряем график.
++            if (abs(rawToGainDb(band.gain)) < 0.05f) continue
++            val bandPath = Path()
++            val linePath = Path()
++            val zeroY = dbToY(0f)
++            var t = 0f
++            bandPath.moveTo(plotLeft, zeroY)
++            var lineFirst = true
++            while (t <= 1f) {
++                val x = plotLeft + t * (plotRight - plotLeft)
++                val y = dbToY(bandDbAt(band, bandId, t))
++                bandPath.lineTo(x, y)
++                // Отдельный НЕзамкнутый путь под контур: если обводить сам
++                // bandPath, у каждой полосы прочерчивалась бы ещё и линия
++                // нуля через весь график плюс вертикальные края - при
++                // четырёх полосах это превращалось бы в кашу.
++                if (lineFirst) { linePath.moveTo(x, y); lineFirst = false } else linePath.lineTo(x, y)
++                t += 0.01f
++            }
++            bandPath.lineTo(plotRight, zeroY)
++            bandPath.close()
++            bandFillPaint.color = (band.color and 0x00FFFFFF) or (0x40 shl 24)
++            canvas.drawPath(bandPath, bandFillPaint)
++            bandLinePaint.color = (band.color and 0x00FFFFFF) or (0xB0 shl 24)
++            canvas.drawPath(linePath, bandLinePaint)
++        }
++
+         val path = Path()
+         var first = true
+         var tx = 0f
+@@ -236,40 +392,7 @@
+             var totalDb = 0f
+             for ((i, band) in bands.withIndex()) {
+                 if (!band.active) continue
+-                val bandId = bandOrder[i]
+-                val bandDb = (band.gain - 0.5f) * 2f * gainRangeDb
+-                val bandXNorm = hzToXNorm(rawToHz(band.freq, bandId))
+-                // РАНЬШЕ здесь была захардкоженная константа 0.10f - ручка
+-                // WIDTH визуально ни на что не влияла, хотя число под ней
+-                // менялось. Теперь реальная ширина полосы (0.1-3.0,
+-                // подтверждённый диапазон) определяет форму колокола:
+-                // больше WIDTH -> шире и положе, меньше -> уже́ и острее.
+-                val actualWidth = rawToWidthPublic(band.width)
+-                val widthFactor = (actualWidth * octaveNorm).coerceIn(0.008f, 0.5f)
+-                // BELL (mode 0/PARAMETRIC) - симметричный колокол, как
+-                // раньше. SHELF (mode 1/2/3 - BRIGHT/CLASSIC/SOFT) - "полка"
+-                // с разной крутизной перехода: BRIGHT самая резкая, SOFT -
+-                // самая плавная, CLASSIC - между ними. Реальная акустическая
+-                // разница между тремя shelf-вариантами пультом не
+-                // документирована - это условное визуальное приближение,
+-                // чтобы хотя бы было заметно, что режимы разные, а не
+-                // лабораторно точное воспроизведение.
+-                val isShelf = band.shapeMode != 0 && (bandId == BandId.BASS || bandId == BandId.TREBLE)
+-                val shelfSteepness = when (band.shapeMode) {
+-                    1 -> widthFactor * 0.5f  // BRIGHT - самый резкий переход
+-                    2 -> widthFactor * 1.0f  // CLASSIC - средний
+-                    3 -> widthFactor * 1.8f  // SOFT - самый плавный
+-                    else -> widthFactor
+-                }
+-                val influence = if (isShelf && bandId == BandId.BASS) {
+-                    1f / (1f + Math.E.toFloat().pow((tx - bandXNorm) / shelfSteepness))
+-                } else if (isShelf && bandId == BandId.TREBLE) {
+-                    1f / (1f + Math.E.toFloat().pow(-(tx - bandXNorm) / shelfSteepness))
+-                } else {
+-                    val dist = abs(tx - bandXNorm)
+-                    Math.E.toFloat().pow(-(dist * dist) / (2 * widthFactor * widthFactor))
+-                }
+-                totalDb += bandDb * influence
++                totalDb += bandDbAt(band, bandOrder[i], tx)
+             }
+             // HP/LP - раньше на графике были только перетаскиваемые точки,
+             // сам спад никак не показывался. Теперь фильтр реально "режет"
+@@ -280,15 +403,22 @@
+             val steepness = 0.015f
+             val filterFloorDb = -60f
+             if (hpOn) {
+-                val passAbove = 1f / (1f + Math.E.toFloat().pow(-(tx - hpFreq) / steepness))
++                val hpNorm = hzToXNorm(rawToRangeHz(hpFreq, hpHzRange))
++                val passAbove = 1f / (1f + Math.E.toFloat().pow(-(tx - hpNorm) / steepness))
+                 totalDb += filterFloorDb * (1f - passAbove)
+             }
+             if (lpOn) {
+-                val passBelow = 1f / (1f + Math.E.toFloat().pow((tx - lpFreq) / steepness))
++                val lpNorm = hzToXNorm(rawToRangeHz(lpFreq, lpHzRange))
++                val passBelow = 1f / (1f + Math.E.toFloat().pow((tx - lpNorm) / steepness))
+                 totalDb += filterFloorDb * (1f - passBelow)
+             }
+             val x = plotLeft + tx * (plotRight - plotLeft)
+-            val y = gainToY((totalDb / (2 * gainRangeDb) + 0.5f).coerceIn(0f, 1f))
++            // ИСПРАВЛЕНО: раньше здесь totalDb переводился обратно в
++            // "сырое" значение линейной формулой и подавался в gainToY,
++            // который сам прогоняет его через нелинейную шкалу лимба -
++            // получалось двойное преобразование и искажённая кривая.
++            // Теперь дБ отображаются напрямую.
++            val y = dbToY(totalDb)
+             if (first) { path.moveTo(x, y); first = false } else path.lineTo(x, y)
+             tx += 0.01f
+         }
+@@ -297,11 +427,11 @@
+         // HPF/LPF реально режут сигнал, для наглядности даже без
+         // разглядывания самой кривой.
+         if (hpOn) {
+-            val hpX = freqToX(hpFreq)
++            val hpX = hpToX(hpFreq)
+             canvas.drawRect(plotLeft, plotTop, hpX, plotBottom, cutZonePaint)
+         }
+         if (lpOn) {
+-            val lpX = freqToX(lpFreq)
++            val lpX = lpToX(lpFreq)
+             canvas.drawRect(lpX, plotTop, plotRight, plotBottom, cutZonePaint)
+         }
+ 
+@@ -312,13 +442,13 @@
+         canvas.drawPath(fillPath, fillPaint)
+         canvas.drawPath(path, curvePaint)
+ 
+-        val hpX = freqToX(hpFreq)
++        val hpX = hpToX(hpFreq)
+         val hpY = plotBottom - 10f
+         nodePaint.color = if (hpOn) Color.parseColor("#34c759") else Color.parseColor("#666666")
+         canvas.drawCircle(hpX, hpY, 14f, nodePaint)
+         canvas.drawCircle(hpX, hpY, 14f, nodeStrokePaint)
+ 
+-        val lpX = freqToX(lpFreq)
++        val lpX = lpToX(lpFreq)
+         nodePaint.color = if (lpOn) Color.parseColor("#af52de") else Color.parseColor("#666666")
+         canvas.drawCircle(lpX, hpY, 14f, nodePaint)
+         canvas.drawCircle(lpX, hpY, 14f, nodeStrokePaint)
+@@ -348,12 +478,14 @@
+                 if (draggingNode == -3) return false
+                 when {
+                     draggingNode == -1 -> {
+-                        val freq = xToFreq(event.x)
++                        // Через реальный диапазон 10-400 Гц, а не всю ось.
++                        val freq = xToHpRaw(event.x)
+                         hpFreq = freq
+                         onNodeDragged?.invoke(-1, freq, 0f)
+                     }
+                     draggingNode == -2 -> {
+-                        val freq = xToFreq(event.x)
++                        // Через реальный диапазон 2-20 кГц, а не всю ось.
++                        val freq = xToLpRaw(event.x)
+                         lpFreq = freq
+                         onNodeDragged?.invoke(-2, freq, 0f)
+                     }
+@@ -387,11 +519,11 @@
+             val d = distance(x, y, bx, by)
+             if (d < touchRadius && d < bestDist) { best = i; bestDist = d }
+         }
+-        val hpX = freqToX(hpFreq)
++        val hpX = hpToX(hpFreq)
+         val hpY = plotBottom - 10f
+         val dHp = distance(x, y, hpX, hpY)
+         if (dHp < touchRadius && dHp < bestDist) { best = -1; bestDist = dHp }
+-        val lpX = freqToX(lpFreq)
++        val lpX = lpToX(lpFreq)
+         val dLp = distance(x, y, lpX, hpY)
+         if (dLp < touchRadius && dLp < bestDist) { best = -2; bestDist = dLp }
+         return best

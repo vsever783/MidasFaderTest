@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Ключ для View.setTag(key, value).
+        Android требует, чтобы ключом тега был именно id из ресурсов -
+        произвольное число вызывает IllegalArgumentException. Используется
+        для запоминания последнего цвета метра, чтобы не перекрашивать вью
+        на каждом обновлении (см. MainActivity.setMeterColor).
+    -->
+    <item name="meter_color_tag" type="id" />
+</resources>

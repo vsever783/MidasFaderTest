@@ -10,7 +10,7 @@
         android:label="Midas"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:theme="@style/Theme.AppCompat.DayNight">
+        android:theme="@style/Theme.Midas">
 
         <!-- ОДНА цепочка входа: подключение -> выбор роли -> сам режим.
              Раньше подключение было встроено прямо в MainActivity и
